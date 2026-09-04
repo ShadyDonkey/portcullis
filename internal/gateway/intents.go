@@ -7,6 +7,26 @@ const (
 	IntentGuildMembers
 	IntentGuildModeration
 	IntentGuildExpressions
-
-	// TODO: the rest
+	IntentGuildIntegrations
+	IntentGuildWebhooks
+	IntentGuildInvites
+	IntentGuildVoiceStates
+	IntentGuildPresences
+	IntentGuildMessages
+	IntentGuildMessageReactions
+	IntentGuildMessageTyping
+	IntentDirectMessages
+	IntentDirectMessageReactions
+	IntentDirectMessageTyping
+	IntentMessageContent
+	IntentGuildScheduledEvents
+	_
+	_
+	_
+	IntentAutoModerationConfiguration
+	IntentAutoModerationExecution
+	_
+	_
+	IntentGuildMessagePolls
+	IntentDirectMessagePolls
 )
