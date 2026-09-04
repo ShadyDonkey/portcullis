@@ -67,7 +67,7 @@ func main() {
 	slog.DebugContext(ctx, "Fetched gateway info", "resp", resp)
 
 	// TODO: get intents from config
-	const intents = gateway.IntentGuilds
+	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
 
 	shard, err := gateway.NewShard(
 		ctx, gateway.ShardConfig{

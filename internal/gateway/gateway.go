@@ -111,7 +111,7 @@ func (s *Shard) Start(ctx context.Context) error {
 						}
 
 						// TODO: handle dispatch
-						slog.Debug("received dispatch", "type", i.Type, "data", i.Data, "seq", i.Sequence)
+						slog.Debug("received event", "type", i.Type, "data", i.Data, "seq", i.Sequence)
 					}
 
 				case OpReconnect, OpInvalidSession:
