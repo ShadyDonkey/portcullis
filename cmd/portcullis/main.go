@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/carlmjohnson/requests"
 )
 
@@ -18,6 +19,17 @@ func main() {
 	defer stop()
 
 	token := os.Getenv("DISCORD_TOKEN")
+
+	// TODO: get this from config
+	slog.SetDefault(
+		slog.New(
+			slog.NewTextHandler(
+				os.Stdout, &slog.HandlerOptions{
+					Level: slog.LevelDebug,
+				},
+			),
+		),
+	)
 
 	httpClient := &http.Client{
 		Transport: Transport{
@@ -52,38 +64,37 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("Connected to Discord gateway", "resp", resp)
+	slog.DebugContext(ctx, "Fetched gateway info", "resp", resp)
 
-	//
-	// c, _, dialErr := websocket.Dial(ctx, fmt.Sprintf("%s?v=10&encoding=json", resp.URL), nil)
-	// if dialErr != nil {
-	// 	slog.Error("Failed to connect", "err", dialErr)
-	// 	os.Exit(1)
-	// }
-	//
-	// defer func(c *websocket.Conn) {
-	// 	err = c.CloseNow()
-	// 	if err != nil {
-	// 		slog.Error("Failed to close connection", "err", err)
-	// 	}
-	// }(c)
+	// TODO: get intents from config
+	const intents = gateway.IntentGuilds
 
-	// for {
-	// 	msgType, data, readErr := c.Read(ctx)
-	// 	if readErr != nil {
-	// 		slog.Error("Failed to read message", "err", readErr)
-	// 		break
-	// 	}
-	//
-	// 	var env Envelope
-	// 	err = json.Unmarshal(data, &env)
-	// 	if err != nil {
-	// 		slog.Error("Failed to unmarshal message", "err", err)
-	// 		break
-	// 	}
-	//
-	// 	slog.Info("Read message", "op", env.Op, "seq", env.S, "type", env.T, "data", string(env.D), "msgType", msgType)
-	// }
+	shard, err := gateway.NewShard(
+		ctx, gateway.ShardConfig{
+			URL:       resp.URL,
+			ID:        0,
+			Token:     token,
+			Intents:   int(intents),
+			NumShards: resp.Shards,
+		},
+	)
+	if err != nil {
+		slog.Error("Failed to create shard", "err", err)
+		os.Exit(1)
+	}
+
+	defer func(shard *gateway.Shard) {
+		err = shard.Close()
+		if err != nil {
+			slog.Error("Failed to close shard", "err", err)
+		}
+	}(shard)
+
+	if sErr := shard.Start(ctx); sErr != nil {
+		slog.Error("error occurred on shard", "err", sErr)
+		os.Exit(1)
+	}
+
 }
 
 type Transport struct {
