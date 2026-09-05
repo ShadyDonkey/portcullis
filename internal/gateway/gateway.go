@@ -68,8 +68,11 @@ func (s *Shard) Close() error {
 }
 
 func (s *Shard) Start(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	errCh := make(chan error, 1)
-	go s.readFaucet(ctx, errCh)
+	go s.readFaucet(runCtx, errCh)
 
 	var heartbeatCh <-chan time.Time
 	ackReceived := true
@@ -82,12 +85,17 @@ func (s *Shard) Start(ctx context.Context) error {
 				switch i.Op {
 				case OpHello:
 					{
+						if heartbeatCh != nil {
+							slog.WarnContext(ctx, "duplicate hello ignored")
+							break
+						}
+
 						var hello RecvHelloData
 						if err := json.Unmarshal(i.Data, &hello); err != nil {
 							return fmt.Errorf("failed to unmarshal hello data: %w", err)
 						}
 
-						heartbeatCh = s.defibrillate(ctx, hello.HeartbeatInterval)
+						heartbeatCh = s.defibrillate(runCtx, hello.HeartbeatInterval)
 					}
 				case OpHeartbeatAck:
 					ackReceived = true
@@ -103,7 +111,12 @@ func (s *Shard) Start(ctx context.Context) error {
 
 				case OpDispatch:
 					{
-						s.lastSeq = i.Sequence
+						var seqCopy *int
+						if i.Sequence != nil {
+							seq := *i.Sequence
+							seqCopy = &seq
+						}
+						s.lastSeq = seqCopy
 
 						if i.Type == "READY" || i.Type == "RESUMED" {
 							// TODO: do something with this?
@@ -114,8 +127,12 @@ func (s *Shard) Start(ctx context.Context) error {
 						slog.Debug("received event", "type", i.Type, "data", i.Data, "seq", i.Sequence)
 					}
 
-				case OpReconnect, OpInvalidSession:
-					return fmt.Errorf("gateway requested reconnect, op %d", i.Op)
+				case OpReconnect:
+					return fmt.Errorf("%w: op %d", ErrReconnectRequested, i.Op)
+				case OpInvalidSession:
+					var resumable bool
+					_ = json.Unmarshal(i.Data, &resumable)
+					return &InvalidSessionError{Resumable: resumable}
 				default:
 					slog.WarnContext(ctx, "unhandled opcode case", "op", i.Op)
 				}
@@ -124,8 +141,7 @@ func (s *Shard) Start(ctx context.Context) error {
 		case <-heartbeatCh:
 			{
 				if !ackReceived {
-					slog.ErrorContext(ctx, "heartbeat ack not received")
-					return fmt.Errorf("heartbeat ack not received")
+					return ErrNoHeartbeatAck
 				}
 				ackReceived = false
 				slog.DebugContext(ctx, "sending heartbeat")

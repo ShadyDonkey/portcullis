@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -39,6 +40,7 @@ func (m *ShardManager) Start(ctx context.Context) error {
 	for id := 0; id < m.config.NumShards; id++ {
 		// TODO: need to set the correct generation
 		if err := m.AddShard(ctx, id, 0); err != nil {
+			m.Shutdown()
 			return fmt.Errorf("failed to start shard %d: %w", id, err)
 		}
 	}
@@ -70,11 +72,11 @@ func (m *ShardManager) Shutdown() {
 
 func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if _, exists := m.shards[id]; exists {
+		m.mu.Unlock()
 		return fmt.Errorf("shard %d already exists", id)
 	}
+	m.mu.Unlock()
 
 	shardCtx, cancel := context.WithCancel(ctx)
 	shard, err := NewShard(
@@ -90,6 +92,17 @@ func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) err
 	if err != nil {
 		cancel()
 		return fmt.Errorf("failed to create shard %d: %w", id, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.shards[id]; exists {
+		cancel()
+		if closeErr := shard.Close(); closeErr != nil {
+			slog.Error("failed to close duplicate shard", "id", id, "err", closeErr)
+		}
+		return fmt.Errorf("shard %d already exists", id)
 	}
 
 	ms := &ManagedShard{
@@ -146,9 +159,14 @@ func (m *ShardManager) WaitForShard(id int) error {
 
 func (m *ShardManager) supervise(ctx context.Context, id int, ms *ManagedShard) {
 	err := ms.shard.Start(ctx)
+	ms.cancel()
 
 	if closeErr := ms.shard.Close(); closeErr != nil {
 		slog.ErrorContext(ctx, "failed to close shard", "shard_id", id, "err", closeErr)
+	}
+
+	if ctx.Err() != nil && err != nil && errors.Is(err, ctx.Err()) {
+		err = nil
 	}
 
 	m.mu.Lock()
