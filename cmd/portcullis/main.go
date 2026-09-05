@@ -70,7 +70,7 @@ func main() {
 	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
 
 	manager := gateway.NewShardManager(
-		ctx, gateway.ShardManagerConfig{
+		gateway.ShardManagerConfig{
 			URL:       resp.URL,
 			Token:     token,
 			Intents:   int(intents),

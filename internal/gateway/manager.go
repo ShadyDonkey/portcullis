@@ -10,7 +10,7 @@ import (
 
 type ShardManager struct {
 	mu     sync.Mutex
-	shards map[int]*ManagedShard
+	shards map[int]*managedShard
 	config ShardManagerConfig
 }
 
@@ -21,7 +21,7 @@ type ShardManagerConfig struct {
 	NumShards int
 }
 
-type ManagedShard struct {
+type managedShard struct {
 	shard      *Shard
 	cancel     context.CancelFunc
 	done       chan struct{}
@@ -29,17 +29,18 @@ type ManagedShard struct {
 	err        error
 }
 
-func NewShardManager(ctx context.Context, config ShardManagerConfig) *ShardManager {
+func NewShardManager(config ShardManagerConfig) *ShardManager {
 	return &ShardManager{
 		config: config,
-		shards: make(map[int]*ManagedShard),
+		shards: make(map[int]*managedShard),
 	}
 }
 
+const initialGeneration = 0
+
 func (m *ShardManager) Start(ctx context.Context) error {
 	for id := 0; id < m.config.NumShards; id++ {
-		// TODO: need to set the correct generation
-		if err := m.AddShard(ctx, id, 0); err != nil {
+		if err := m.AddShard(ctx, id, initialGeneration); err != nil {
 			m.Shutdown()
 			return fmt.Errorf("failed to start shard %d: %w", id, err)
 		}
@@ -105,7 +106,7 @@ func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) err
 		return fmt.Errorf("shard %d already exists", id)
 	}
 
-	ms := &ManagedShard{
+	ms := &managedShard{
 		shard:      shard,
 		cancel:     cancel,
 		done:       make(chan struct{}),
@@ -157,7 +158,7 @@ func (m *ShardManager) WaitForShard(id int) error {
 	return err
 }
 
-func (m *ShardManager) supervise(ctx context.Context, id int, ms *ManagedShard) {
+func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) {
 	err := ms.shard.Start(ctx)
 	ms.cancel()
 

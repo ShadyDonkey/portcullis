@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	Version         = 10
-	DefaultEncoding = "json"
-	writeTimeout    = 5 * time.Second
+	Version           = 10
+	DefaultEncoding   = "json"
+	writeTimeout      = 5 * time.Second
+	helloTimeout      = 10 * time.Second
+	identifyJitterMax = 1 * time.Second
 )
 
 type IncomingPayload struct {
@@ -76,9 +78,15 @@ func (s *Shard) Start(ctx context.Context) error {
 
 	st := &loopState{ackReceived: true}
 
+	helloTimer := time.NewTimer(helloTimeout)
+	defer helloTimer.Stop()
+
 	for {
 		select {
 		case p := <-s.inbound:
+			if p.Op == OpHello {
+				helloTimer.Stop()
+			}
 			if err := s.handlePayload(ctx, runCtx, p, st); err != nil {
 				return err
 			}
@@ -87,6 +95,9 @@ func (s *Shard) Start(ctx context.Context) error {
 			if err := s.handleHeartbeatTick(ctx, st); err != nil {
 				return err
 			}
+
+		case <-helloTimer.C:
+			return ErrHelloTimeout
 
 		case err := <-errCh:
 			return fmt.Errorf("faucet failure: %w", err)
@@ -118,11 +129,24 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 
 		st.heartbeatCh = s.defibrillate(runCtx, hello.HeartbeatInterval)
 
+		if !st.identified {
+			delay := time.Duration(rand.Float64() * float64(identifyJitterMax))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			if err := s.identify(ctx); err != nil {
+				return fmt.Errorf("failed to identify: %w", err)
+			}
+			st.identified = true
+		}
+
 	case OpHeartbeatAck:
 		st.ackReceived = true
 
 	case OpHeartbeat:
-		st.ackReceived = false
 		if err := s.sendHeartbeat(ctx); err != nil {
 			return err
 		}
@@ -162,18 +186,7 @@ func (s *Shard) handleHeartbeatTick(ctx context.Context, st *loopState) error {
 	}
 	st.ackReceived = false
 	slog.DebugContext(ctx, "sending heartbeat")
-	if err := s.sendHeartbeat(ctx); err != nil {
-		return err
-	}
-
-	if !st.identified {
-		if err := s.identify(ctx); err != nil {
-			return fmt.Errorf("failed to identify: %w", err)
-		}
-		st.identified = true
-	}
-
-	return nil
+	return s.sendHeartbeat(ctx)
 }
 
 func (s *Shard) readFaucet(ctx context.Context, errChan chan<- error) {
@@ -181,6 +194,9 @@ func (s *Shard) readFaucet(ctx context.Context, errChan chan<- error) {
 		// TODO: will need message type if I add compression
 		_, data, err := s.conn.Read(ctx)
 		if err != nil {
+			if code := websocket.CloseStatus(err); code != -1 {
+				err = &CloseError{Code: int(code), Resumable: isResumableCloseCode(int(code)), Err: err}
+			}
 			select {
 			case errChan <- err:
 			case <-ctx.Done():
@@ -276,15 +292,14 @@ func (s *Shard) defibrillate(ctx context.Context, intervalMs int) <-chan time.Ti
 func (s *Shard) identify(ctx context.Context) error {
 	payload := struct {
 		Op   Opcode           `json:"op"`
-		Data SendIdentifyData `json:"d"`
+		Data sendIdentifyData `json:"d"`
 	}{
 		Op: OpIdentify,
-		Data: SendIdentifyData{
+		Data: sendIdentifyData{
 			Token: s.token,
-			Properties: SendIdentifyProperties{
-				OS: runtime.GOOS,
-				// TODO: make these better
-				Browser: "portcullisgw.com",
+			Properties: sendIdentifyProperties{
+				OS:      runtime.GOOS,
+				Browser: "portcullis",
 				Device:  "portcullis",
 			},
 			Intents: s.intents,
