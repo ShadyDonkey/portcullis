@@ -74,87 +74,18 @@ func (s *Shard) Start(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go s.readFaucet(runCtx, errCh)
 
-	var heartbeatCh <-chan time.Time
-	ackReceived := true
-	identified := false
+	st := &loopState{ackReceived: true}
 
 	for {
 		select {
-		case i := <-s.inbound:
-			{
-				switch i.Op {
-				case OpHello:
-					{
-						if heartbeatCh != nil {
-							slog.WarnContext(ctx, "duplicate hello ignored")
-							break
-						}
-
-						var hello RecvHelloData
-						if err := json.Unmarshal(i.Data, &hello); err != nil {
-							return fmt.Errorf("failed to unmarshal hello data: %w", err)
-						}
-
-						heartbeatCh = s.defibrillate(runCtx, hello.HeartbeatInterval)
-					}
-				case OpHeartbeatAck:
-					ackReceived = true
-
-				case OpHeartbeat:
-					{
-						ackReceived = false
-						err := s.sendHeartbeat(ctx)
-						if err != nil {
-							return err
-						}
-					}
-
-				case OpDispatch:
-					{
-						var seqCopy *int
-						if i.Sequence != nil {
-							seq := *i.Sequence
-							seqCopy = &seq
-						}
-						s.lastSeq = seqCopy
-
-						if i.Type == "READY" || i.Type == "RESUMED" {
-							// TODO: do something with this?
-							continue
-						}
-
-						// TODO: handle dispatch
-						slog.Debug("received event", "type", i.Type, "data", i.Data, "seq", i.Sequence)
-					}
-
-				case OpReconnect:
-					return fmt.Errorf("%w: op %d", ErrReconnectRequested, i.Op)
-				case OpInvalidSession:
-					var resumable bool
-					_ = json.Unmarshal(i.Data, &resumable)
-					return &InvalidSessionError{Resumable: resumable}
-				default:
-					slog.WarnContext(ctx, "unhandled opcode case", "op", i.Op)
-				}
+		case p := <-s.inbound:
+			if err := s.handlePayload(ctx, runCtx, p, st); err != nil {
+				return err
 			}
 
-		case <-heartbeatCh:
-			{
-				if !ackReceived {
-					return ErrNoHeartbeatAck
-				}
-				ackReceived = false
-				slog.DebugContext(ctx, "sending heartbeat")
-				if err := s.sendHeartbeat(ctx); err != nil {
-					return err
-				}
-
-				if !identified {
-					if err := s.identify(ctx); err != nil {
-						return fmt.Errorf("failed to identify: %w", err)
-					}
-					identified = true
-				}
+		case <-st.heartbeatCh:
+			if err := s.handleHeartbeatTick(ctx, st); err != nil {
+				return err
 			}
 
 		case err := <-errCh:
@@ -164,6 +95,85 @@ func (s *Shard) Start(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+type loopState struct {
+	heartbeatCh <-chan time.Time
+	ackReceived bool
+	identified  bool
+}
+
+func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st *loopState) error {
+	switch p.Op {
+	case OpHello:
+		if st.heartbeatCh != nil {
+			slog.WarnContext(ctx, "duplicate hello ignored")
+			return nil
+		}
+
+		var hello RecvHelloData
+		if err := json.Unmarshal(p.Data, &hello); err != nil {
+			return fmt.Errorf("failed to unmarshal hello data: %w", err)
+		}
+
+		st.heartbeatCh = s.defibrillate(runCtx, hello.HeartbeatInterval)
+
+	case OpHeartbeatAck:
+		st.ackReceived = true
+
+	case OpHeartbeat:
+		st.ackReceived = false
+		if err := s.sendHeartbeat(ctx); err != nil {
+			return err
+		}
+
+	case OpDispatch:
+		var seqCopy *int
+		if p.Sequence != nil {
+			seq := *p.Sequence
+			seqCopy = &seq
+		}
+		s.lastSeq = seqCopy
+
+		if p.Type == "READY" || p.Type == "RESUMED" {
+			// TODO: do something with this?
+			return nil
+		}
+
+		// TODO: handle dispatch
+		slog.Debug("received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
+
+	case OpReconnect:
+		return fmt.Errorf("%w: op %d", ErrReconnectRequested, p.Op)
+	case OpInvalidSession:
+		var resumable bool
+		_ = json.Unmarshal(p.Data, &resumable)
+		return &InvalidSessionError{Resumable: resumable}
+	default:
+		slog.WarnContext(ctx, "unhandled opcode case", "op", p.Op)
+	}
+
+	return nil
+}
+
+func (s *Shard) handleHeartbeatTick(ctx context.Context, st *loopState) error {
+	if !st.ackReceived {
+		return ErrNoHeartbeatAck
+	}
+	st.ackReceived = false
+	slog.DebugContext(ctx, "sending heartbeat")
+	if err := s.sendHeartbeat(ctx); err != nil {
+		return err
+	}
+
+	if !st.identified {
+		if err := s.identify(ctx); err != nil {
+			return fmt.Errorf("failed to identify: %w", err)
+		}
+		st.identified = true
+	}
+
+	return nil
 }
 
 func (s *Shard) readFaucet(ctx context.Context, errChan chan<- error) {
