@@ -29,6 +29,28 @@ type managedShard struct {
 	err        error
 }
 
+type ShardStatus int
+
+const (
+	ShardStatusUnknown ShardStatus = iota
+	ShardStatusRunning
+	ShardStatusStopped
+	ShardStatusFailed
+)
+
+func (s ShardStatus) String() string {
+	switch s {
+	case ShardStatusRunning:
+		return "running"
+	case ShardStatusStopped:
+		return "stopped"
+	case ShardStatusFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
 func NewShardManager(config ShardManagerConfig) *ShardManager {
 	return &ShardManager{
 		config: config,
@@ -156,6 +178,44 @@ func (m *ShardManager) WaitForShard(id int) error {
 	m.mu.Unlock()
 
 	return err
+}
+
+func (m *ShardManager) Status(id int) ShardStatus {
+	m.mu.Lock()
+	ms, exists := m.shards[id]
+	m.mu.Unlock()
+
+	if !exists {
+		return ShardStatusUnknown
+	}
+
+	select {
+	case <-ms.done:
+		m.mu.Lock()
+		err := ms.err
+		m.mu.Unlock()
+		if err != nil {
+			return ShardStatusFailed
+		}
+		return ShardStatusStopped
+	default:
+		return ShardStatusRunning
+	}
+}
+
+func (m *ShardManager) Statuses() map[int]ShardStatus {
+	m.mu.Lock()
+	ids := make([]int, 0, len(m.shards))
+	for id := range m.shards {
+		ids = append(ids, id)
+	}
+	m.mu.Unlock()
+
+	result := make(map[int]ShardStatus, len(ids))
+	for _, id := range ids {
+		result[id] = m.Status(id)
+	}
+	return result
 }
 
 func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) {
