@@ -258,7 +258,7 @@ func (s *Shard) identify(ctx context.Context) error {
 			Properties: SendIdentifyProperties{
 				OS: runtime.GOOS,
 				// TODO: make these better
-				Browser: "portcullis",
+				Browser: "portcullisgw.com",
 				Device:  "portcullis",
 			},
 			Intents: s.intents,

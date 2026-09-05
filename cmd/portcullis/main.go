@@ -36,8 +36,8 @@ func main() {
 			RoundTripper: http.DefaultTransport,
 			Headers: http.Header{
 				"Authorization": {fmt.Sprintf("Bot %s", token)},
-				// TODO: replace with real build version and domain name
-				"User-Agent": {fmt.Sprintf("DiscordBot (https://github.com/ShadyDonkey/portcullis, %s)", "0.0.0")},
+				// TODO: replace with real build version
+				"User-Agent": {fmt.Sprintf("DiscordBot (https://portcullisgw.com, %s)", "0.0.0")},
 			},
 		},
 	}
@@ -69,32 +69,23 @@ func main() {
 	// TODO: get intents from config
 	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
 
-	shard, err := gateway.NewShard(
-		ctx, gateway.ShardConfig{
+	manager := gateway.NewShardManager(
+		ctx, gateway.ShardManagerConfig{
 			URL:       resp.URL,
-			ID:        0,
 			Token:     token,
 			Intents:   int(intents),
 			NumShards: resp.Shards,
 		},
 	)
-	if err != nil {
-		slog.Error("Failed to create shard", "err", err)
+
+	if mErr := manager.Start(ctx); mErr != nil {
+		slog.Error("Failed to start shard manager", "err", mErr)
 		os.Exit(1)
 	}
 
-	defer func(shard *gateway.Shard) {
-		err = shard.Close()
-		if err != nil {
-			slog.Error("Failed to close shard", "err", err)
-		}
-	}(shard)
-
-	if sErr := shard.Start(ctx); sErr != nil {
-		slog.Error("error occurred on shard", "err", sErr)
-		os.Exit(1)
-	}
-
+	<-ctx.Done()
+	slog.Info("Shutting down")
+	manager.Shutdown()
 }
 
 type Transport struct {
