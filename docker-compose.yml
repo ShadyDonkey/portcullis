@@ -1,0 +1,23 @@
+name: portcullis_dev
+
+services:
+  nats:
+    image: nats:2.14-alpine
+    container_name: portcullis-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command:
+      - "--name=portcullis-nats"
+      - "--config=/etc/nats/nats-server.conf"
+    volumes:
+      - nats-data:/data
+      - ./nats-server.conf:/etc/nats/nats-server.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  nats-data:
