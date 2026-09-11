@@ -35,6 +35,7 @@ type Shard struct {
 	token     string
 	intents   int
 	numShards int
+	publisher EventPublisher
 }
 
 type ShardConfig struct {
@@ -43,6 +44,7 @@ type ShardConfig struct {
 	Token     string
 	Intents   int
 	NumShards int
+	Publisher EventPublisher
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
@@ -60,6 +62,7 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 		token:     config.Token,
 		intents:   config.Intents,
 		numShards: config.NumShards,
+		publisher: config.Publisher,
 	}
 
 	return shard, nil
@@ -164,8 +167,13 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 			return nil
 		}
 
-		// TODO: handle dispatch
 		slog.Debug("received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
+
+		if err := s.publisher.Publish(ctx, p.Type, p.Data); err != nil {
+			slog.ErrorContext(ctx, "failed to publish event", "err", err, "type", p.Type, "seq", p.Sequence)
+		}
+
+		return nil
 
 	case OpReconnect:
 		return fmt.Errorf("%w: op %d", ErrReconnectRequested, p.Op)

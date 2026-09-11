@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -80,4 +81,18 @@ func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byt
 	}
 
 	return nil
+}
+
+func (j *JetStream) Close() {
+	err := j.nc.Drain()
+	if err != nil {
+		slog.Error("failed to drain nc connection", "err", err)
+		return
+	}
+
+	err = j.js.Conn().Drain()
+	if err != nil {
+		slog.Error("failed to drain js connection", "err", err)
+		return
+	}
 }

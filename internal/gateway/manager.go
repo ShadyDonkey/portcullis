@@ -19,6 +19,7 @@ type ShardManagerConfig struct {
 	Intents   int
 	URL       string
 	NumShards int
+	Publisher EventPublisher
 }
 
 type managedShard struct {
@@ -109,6 +110,7 @@ func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) err
 			Token:     m.config.Token,
 			Intents:   m.config.Intents,
 			NumShards: m.config.NumShards,
+			Publisher: m.config.Publisher,
 		},
 	)
 

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
+	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/carlmjohnson/requests"
 )
 
@@ -30,6 +31,21 @@ func main() {
 			),
 		),
 	)
+
+	js, err := jetstream.New(
+		ctx, jetstream.Config{
+			URL:      "localhost:4222",
+			User:     "portcullis",
+			Password: "supersecret",
+		},
+	)
+
+	if err != nil {
+		slog.Error("Failed to connect to jetstream", "err", err)
+		os.Exit(1)
+	}
+
+	defer js.Close()
 
 	httpClient := &http.Client{
 		Transport: Transport{
@@ -53,7 +69,7 @@ func main() {
 		} `json:"session_start_limit"`
 	}
 
-	err := requests.
+	err = requests.
 		URL("https://discord.com/api/v10/gateway/bot").
 		Client(httpClient).
 		ToJSON(&resp).
@@ -75,6 +91,7 @@ func main() {
 			Token:     token,
 			Intents:   int(intents),
 			NumShards: resp.Shards,
+			Publisher: js,
 		},
 	)
 
