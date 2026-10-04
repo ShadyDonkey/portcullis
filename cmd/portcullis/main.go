@@ -85,13 +85,18 @@ func main() {
 	// TODO: get intents from config
 	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
 
+	slog.DebugContext(
+		ctx, "Starting shard manager", "url", resp.URL, "intents", intents, "numShards", resp.Shards,
+	)
+
 	manager := gateway.NewShardManager(
 		gateway.ShardManagerConfig{
-			URL:       resp.URL,
-			Token:     token,
-			Intents:   int(intents),
-			NumShards: resp.Shards,
-			Publisher: js,
+			URL:          resp.URL,
+			Token:        token,
+			Intents:      int(intents),
+			NumShards:    resp.Shards,
+			Publisher:    js,
+			SessionStore: js,
 		},
 	)
 

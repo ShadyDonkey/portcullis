@@ -13,6 +13,13 @@ import (
 const (
 	eventStreamName     = "DISCORD_EVENTS"
 	eventSubjectPattern = "events.*"
+
+	// per shard session state for proxy use for fresh or resume on restart?
+	shardSessionBucketName    = "DISCORD_SHARD_SESSION_STATE"
+	shardSessionBucketHistory = 1 // TODO: do I need this defined here?
+
+	// key for holding info on the global state like intents, number of shards, etc
+	globalStateKey = "proxy-state"
 )
 
 type Config struct {
@@ -26,6 +33,7 @@ type Config struct {
 type JetStream struct {
 	nc *nats.Conn
 	js jetstream.JetStream
+	kv jetstream.KeyValue
 }
 
 func New(ctx context.Context, config Config) (*JetStream, error) {
@@ -59,13 +67,26 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 	if err != nil {
 		nc.Close()
-		js.Conn().Close()
+		return nil, err
+	}
+
+	kv, err := js.CreateOrUpdateKeyValue(
+		ctx, jetstream.KeyValueConfig{
+			Bucket:  shardSessionBucketName,
+			History: shardSessionBucketHistory,
+			Storage: jetstream.FileStorage,
+		},
+	)
+
+	if err != nil {
+		nc.Close()
 		return nil, err
 	}
 
 	return &JetStream{
 		nc: nc,
 		js: js,
+		kv: kv,
 	}, nil
 }
 
@@ -84,15 +105,11 @@ func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byt
 }
 
 func (j *JetStream) Close() {
-	err := j.nc.Drain()
-	if err != nil {
-		slog.Error("failed to drain nc connection", "err", err)
-		return
+	if err := j.nc.Drain(); err != nil {
+		slog.Error("failed to drain NATS connection", "err", err)
 	}
+}
 
-	err = j.js.Conn().Drain()
-	if err != nil {
-		slog.Error("failed to drain js connection", "err", err)
-		return
-	}
+func shardSessionKey(shardID int) string {
+	return fmt.Sprintf("shard-%d", shardID)
 }

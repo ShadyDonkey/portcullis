@@ -15,11 +15,12 @@ type ShardManager struct {
 }
 
 type ShardManagerConfig struct {
-	Token     string
-	Intents   int
-	URL       string
-	NumShards int
-	Publisher EventPublisher
+	Token        string
+	Intents      int
+	URL          string
+	NumShards    int
+	Publisher    EventPublisher
+	SessionStore SessionStore
 }
 
 type managedShard struct {
@@ -105,12 +106,13 @@ func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) err
 	shardCtx, cancel := context.WithCancel(ctx)
 	shard, err := NewShard(
 		shardCtx, ShardConfig{
-			URL:       m.config.URL,
-			ID:        id,
-			Token:     m.config.Token,
-			Intents:   m.config.Intents,
-			NumShards: m.config.NumShards,
-			Publisher: m.config.Publisher,
+			URL:          m.config.URL,
+			ID:           id,
+			Token:        m.config.Token,
+			Intents:      m.config.Intents,
+			NumShards:    m.config.NumShards,
+			Publisher:    m.config.Publisher,
+			SessionStore: m.config.SessionStore,
 		},
 	)
 

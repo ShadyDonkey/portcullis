@@ -28,23 +28,25 @@ type IncomingPayload struct {
 }
 
 type Shard struct {
-	id        int
-	conn      *websocket.Conn
-	inbound   chan IncomingPayload
-	lastSeq   *int
-	token     string
-	intents   int
-	numShards int
-	publisher EventPublisher
+	id           int
+	conn         *websocket.Conn
+	inbound      chan IncomingPayload
+	lastSeq      *int
+	token        string
+	intents      int
+	numShards    int
+	publisher    EventPublisher
+	sessionStore SessionStore
 }
 
 type ShardConfig struct {
-	URL       string
-	ID        int
-	Token     string
-	Intents   int
-	NumShards int
-	Publisher EventPublisher
+	URL          string
+	ID           int
+	Token        string
+	Intents      int
+	NumShards    int
+	Publisher    EventPublisher
+	SessionStore SessionStore
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
@@ -55,14 +57,15 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 	}
 
 	shard := &Shard{
-		id:        config.ID,
-		conn:      c,
-		inbound:   make(chan IncomingPayload),
-		lastSeq:   nil,
-		token:     config.Token,
-		intents:   config.Intents,
-		numShards: config.NumShards,
-		publisher: config.Publisher,
+		id:           config.ID,
+		conn:         c,
+		inbound:      make(chan IncomingPayload),
+		lastSeq:      nil,
+		token:        config.Token,
+		intents:      config.Intents,
+		numShards:    config.NumShards,
+		publisher:    config.Publisher,
+		sessionStore: config.SessionStore,
 	}
 
 	return shard, nil
@@ -162,8 +165,34 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 		}
 		s.lastSeq = seqCopy
 
-		if p.Type == "READY" || p.Type == "RESUMED" {
-			// TODO: do something with this?
+		if p.Type == "READY" {
+			var ready RecvReadyData
+			if err := json.Unmarshal(p.Data, &ready); err != nil {
+				return fmt.Errorf("failed to unmarshal ready data: %w", err)
+			}
+
+			if ready.Shard != nil && (ready.Shard[0] != s.id || ready.Shard[1] != s.numShards) {
+				slog.WarnContext(
+					ctx, "ready shard mismatch", "expected_id", s.id, "actual_id", ready.Shard[0],
+					"expected_num_shards", s.numShards, "actual_num_shards", ready.Shard[1],
+				)
+			}
+
+			sess := Session{
+				ID:               ready.SessionID,
+				ResumeGatewayURL: ready.ResumeGatewayURL,
+				LastSeq:          s.lastSeq,
+			}
+
+			if err := s.sessionStore.PutSession(ctx, s.id, sess); err != nil {
+				slog.ErrorContext(ctx, "failed to put session", "shard_id", s.id, "err", err)
+			}
+
+			return nil
+		}
+
+		if p.Type == "RESUMED" {
+			slog.InfoContext(ctx, "session resumed", "shard_id", s.id)
 			return nil
 		}
 

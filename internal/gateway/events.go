@@ -4,6 +4,12 @@ type RecvHelloData struct {
 	HeartbeatInterval int `json:"heartbeat_interval"`
 }
 
+type RecvReadyData struct {
+	SessionID        string  `json:"session_id"`
+	ResumeGatewayURL string  `json:"resume_gateway_url"`
+	Shard            *[2]int `json:"shard"`
+}
+
 type sendIdentifyData struct {
 	Token          string                 `json:"token"`
 	Properties     sendIdentifyProperties `json:"properties"`
