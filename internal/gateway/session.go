@@ -5,12 +5,13 @@ import (
 )
 
 type Session struct {
-	ID               string
-	ResumeGatewayURL string
-	LastSeq          *int
+	ID               string `json:"session_id"`
+	ResumeGatewayURL string `json:"resume_gateway_url"`
+	LastSequence     *int   `json:"last_sequence"`
 }
 
 type SessionStore interface {
 	GetSession(ctx context.Context, shardID int) (*Session, error)
 	PutSession(ctx context.Context, shardID int, session Session) error
+	DeleteSession(ctx context.Context, shardID int) error
 }

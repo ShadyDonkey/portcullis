@@ -47,6 +47,18 @@ func (j *JetStream) PutSession(ctx context.Context, shardID int, session gateway
 	return nil
 }
 
+func (j *JetStream) DeleteSession(ctx context.Context, shardID int) error {
+	if err := j.kv.Delete(ctx, shardSessionKey(shardID)); err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil
+		}
+
+		return fmt.Errorf("delete session err, shard %d: %w", shardID, err)
+	}
+
+	return nil
+}
+
 func (j *JetStream) GetGlobalState(ctx context.Context) (*GlobalState, error) {
 	entry, err := j.kv.Get(ctx, globalStateKey)
 	if err != nil {
