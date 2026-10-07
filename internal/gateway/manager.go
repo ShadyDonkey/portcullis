@@ -6,21 +6,28 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
+)
+
+const (
+	initialGeneration = 0
 )
 
 type ShardManager struct {
-	mu     sync.Mutex
-	shards map[int]*managedShard
-	config ShardManagerConfig
+	mu       sync.Mutex
+	shards   map[int]*managedShard
+	config   ShardManagerConfig
+	identify *bucketLimiter
 }
 
 type ShardManagerConfig struct {
-	Token        string
-	Intents      int
-	URL          string
-	NumShards    int
-	Publisher    EventPublisher
-	SessionStore SessionStore
+	Token          string
+	Intents        int
+	URL            string
+	NumShards      int
+	MaxConcurrency int
+	Publisher      EventPublisher
+	SessionStore   SessionStore
 }
 
 type managedShard struct {
@@ -55,12 +62,11 @@ func (s ShardStatus) String() string {
 
 func NewShardManager(config ShardManagerConfig) *ShardManager {
 	return &ShardManager{
-		config: config,
-		shards: make(map[int]*managedShard),
+		config:   config,
+		shards:   make(map[int]*managedShard),
+		identify: newIdentifyBucketLimiter(config.MaxConcurrency),
 	}
 }
-
-const initialGeneration = 0
 
 func (m *ShardManager) Start(ctx context.Context) error {
 	for id := 0; id < m.config.NumShards; id++ {
@@ -92,7 +98,17 @@ func (m *ShardManager) Shutdown() {
 		)
 	}
 
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(shardShutdownTimeout):
+		slog.Error("shutdown timed out, shards may have no exited cleanly", "timeout", shardShutdownTimeout)
+	}
 }
 
 func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) error {
@@ -104,17 +120,7 @@ func (m *ShardManager) AddShard(ctx context.Context, id int, generation int) err
 	m.mu.Unlock()
 
 	shardCtx, cancel := context.WithCancel(ctx)
-	shard, err := NewShard(
-		shardCtx, ShardConfig{
-			URL:          m.config.URL,
-			ID:           id,
-			Token:        m.config.Token,
-			Intents:      m.config.Intents,
-			NumShards:    m.config.NumShards,
-			Publisher:    m.config.Publisher,
-			SessionStore: m.config.SessionStore,
-		},
-	)
+	shard, err := NewShard(shardCtx, m.idToShardConfig(id))
 
 	if err != nil {
 		cancel()
@@ -223,17 +229,49 @@ func (m *ShardManager) Statuses() map[int]ShardStatus {
 }
 
 func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) {
-	err := ms.shard.Start(ctx)
+	var bo backoff
+	var err error
+
+	for {
+		startedAt := time.Now()
+		err = ms.shard.Start(ctx)
+
+		if closeErr := ms.shard.Close(); closeErr != nil && err == nil {
+			slog.ErrorContext(ctx, "failed to close shard", "shard_id", id, "err", closeErr)
+		}
+
+		if ctx.Err() != nil {
+			if err != nil && errors.Is(err, ctx.Err()) {
+				err = nil
+			}
+			break
+		}
+
+		action := errorToExitAction(err)
+		if action == exitStop {
+			err = fmt.Errorf("exit stop code received, not reconnecting: %w", err)
+			break
+		}
+
+		if time.Since(startedAt) >= reconnectStableAfter {
+			bo.reset()
+		}
+
+		if action == exitReidentify {
+			m.discardSession(ctx, id)
+		}
+
+		var shard *Shard
+		shard, shardErr := m.reconnect(ctx, id, &bo, action, err)
+		if shardErr != nil {
+			err = nil
+			break
+		}
+
+		ms.shard = shard
+	}
+
 	ms.cancel()
-
-	if closeErr := ms.shard.Close(); closeErr != nil {
-		slog.ErrorContext(ctx, "failed to close shard", "shard_id", id, "err", closeErr)
-	}
-
-	if ctx.Err() != nil && err != nil && errors.Is(err, ctx.Err()) {
-		err = nil
-	}
-
 	m.mu.Lock()
 	ms.err = err
 	m.mu.Unlock()
@@ -241,8 +279,63 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 	close(ms.done)
 
 	if err != nil {
-		slog.ErrorContext(ctx, "shard exited with error", "shard_id", id, "err", err)
+		slog.ErrorContext(ctx, "shard exited with an error", "shard_id", id, "err", err)
 	} else {
-		slog.InfoContext(ctx, "shard exited normally", "shard_id", id)
+		slog.InfoContext(ctx, "shard exited successfully", "shard_id", id)
+	}
+}
+
+func (m *ShardManager) reconnect(ctx context.Context, id int, bo *backoff, action exitAction, cause error) (
+	*Shard, error,
+) {
+	for {
+		delay := bo.next()
+
+		if action == exitReidentify {
+			delay = max(delay, reidentifyDelay())
+		}
+
+		slog.WarnContext(
+			ctx, "shard disconnected, reconnecting", "shard_id", id, "action", action, "delay", delay, "cause", cause,
+		)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		shard, err := NewShard(ctx, m.idToShardConfig(id))
+		if err == nil {
+			return shard, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		cause = err
+	}
+}
+
+func (m *ShardManager) discardSession(ctx context.Context, id int) {
+	deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
+	defer cancel()
+
+	if err := m.config.SessionStore.DeleteSession(deleteCtx, id); err != nil {
+		slog.ErrorContext(ctx, "failed to discard session", "shard_id", id, "err", err)
+	}
+}
+
+func (m *ShardManager) idToShardConfig(id int) ShardConfig {
+	return ShardConfig{
+		ID:              id,
+		URL:             m.config.URL,
+		Token:           m.config.Token,
+		Intents:         m.config.Intents,
+		NumShards:       m.config.NumShards,
+		Publisher:       m.config.Publisher,
+		SessionStore:    m.config.SessionStore,
+		IdentifyLimiter: m.identify,
 	}
 }

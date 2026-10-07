@@ -12,14 +12,6 @@ import (
 	"github.com/coder/websocket"
 )
 
-const (
-	Version           = 10
-	DefaultEncoding   = "json"
-	writeTimeout      = 5 * time.Second
-	helloTimeout      = 10 * time.Second
-	identifyJitterMax = 1 * time.Second
-)
-
 type IncomingPayload struct {
 	Op       Opcode          `json:"op"`
 	Data     json.RawMessage `json:"d"`
@@ -31,26 +23,53 @@ type Shard struct {
 	id           int
 	conn         *websocket.Conn
 	inbound      chan IncomingPayload
-	lastSeq      *int
+	lastSequence *int
 	token        string
 	intents      int
 	numShards    int
 	publisher    EventPublisher
 	sessionStore SessionStore
+	session      *Session
 }
 
 type ShardConfig struct {
-	URL          string
-	ID           int
-	Token        string
-	Intents      int
-	NumShards    int
-	Publisher    EventPublisher
-	SessionStore SessionStore
+	URL             string
+	ID              int
+	Token           string
+	Intents         int
+	NumShards       int
+	Publisher       EventPublisher
+	SessionStore    SessionStore
+	IdentifyLimiter *bucketLimiter
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
-	c, _, dialErr := websocket.Dial(ctx, fmt.Sprintf("%s?v=%d&encoding=%s", config.URL, Version, DefaultEncoding), nil)
+	stored, err := config.SessionStore.GetSession(ctx, config.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load session: %w", err)
+	}
+
+	dialURL := config.URL
+	var session *Session
+	var lastSequence *int
+
+	if stored != nil && stored.ID != "" && stored.ResumeGatewayURL != "" && stored.LastSequence != nil {
+		session = stored
+		seq := *stored.LastSequence
+		lastSequence = &seq
+		dialURL = stored.ResumeGatewayURL
+
+		slog.InfoContext(ctx, "found stored session, will attempt to resume", "shard_id", config.ID, "sequence", seq)
+	}
+
+	if session == nil && config.IdentifyLimiter != nil {
+		if err = config.IdentifyLimiter.Wait(ctx, config.ID); err != nil {
+			return nil, fmt.Errorf("failed to wait for identification slot: %w", err)
+		}
+	}
+
+	c, _, dialErr := websocket.Dial(ctx, dialURL, nil)
+	c.SetReadLimit(websocketMaxMessageSize)
 
 	if dialErr != nil {
 		return nil, fmt.Errorf("failed to dial websocket: %w", dialErr)
@@ -60,7 +79,8 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 		id:           config.ID,
 		conn:         c,
 		inbound:      make(chan IncomingPayload),
-		lastSeq:      nil,
+		lastSequence: lastSequence,
+		session:      session,
 		token:        config.Token,
 		intents:      config.Intents,
 		numShards:    config.NumShards,
@@ -78,6 +98,7 @@ func (s *Shard) Close() error {
 func (s *Shard) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer s.persistSession(context.WithoutCancel(ctx))
 
 	errCh := make(chan error, 1)
 	go s.readFaucet(runCtx, errCh)
@@ -136,16 +157,18 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 		st.heartbeatCh = s.defibrillate(runCtx, hello.HeartbeatInterval)
 
 		if !st.identified {
-			delay := time.Duration(rand.Float64() * float64(identifyJitterMax))
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return ctx.Err()
+			if s.session != nil {
+				if err := s.resume(ctx); err != nil {
+					return fmt.Errorf("failed to resume session: %w", err)
+				}
+
+				slog.InfoContext(ctx, "resuming session", "shard_id", s.id, "sequence", *s.lastSequence)
+			} else {
+				if err := s.identify(ctx); err != nil {
+					return fmt.Errorf("failed to identify session: %w", err)
+				}
 			}
 
-			if err := s.identify(ctx); err != nil {
-				return fmt.Errorf("failed to identify: %w", err)
-			}
 			st.identified = true
 		}
 
@@ -163,7 +186,7 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 			seq := *p.Sequence
 			seqCopy = &seq
 		}
-		s.lastSeq = seqCopy
+		s.lastSequence = seqCopy
 
 		if p.Type == "READY" {
 			var ready RecvReadyData
@@ -178,16 +201,15 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 				)
 			}
 
-			sess := Session{
+			s.session = &Session{
 				ID:               ready.SessionID,
 				ResumeGatewayURL: ready.ResumeGatewayURL,
-				LastSeq:          s.lastSeq,
+
+				// TODO: do I still need to do last sequence assignment?
+				// LastSequence:     s.lastSequence,
 			}
 
-			if err := s.sessionStore.PutSession(ctx, s.id, sess); err != nil {
-				slog.ErrorContext(ctx, "failed to put session", "shard_id", s.id, "err", err)
-			}
-
+			s.persistSession(ctx)
 			return nil
 		}
 
@@ -209,6 +231,18 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 	case OpInvalidSession:
 		var resumable bool
 		_ = json.Unmarshal(p.Data, &resumable)
+
+		if !resumable {
+			s.session = nil
+			s.lastSequence = nil
+			deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
+			defer cancel()
+
+			if err := s.sessionStore.DeleteSession(deleteCtx, s.id); err != nil {
+				slog.ErrorContext(ctx, "failed to delete session", "shard_id", s.id, "err", err)
+			}
+		}
+
 		return &InvalidSessionError{Resumable: resumable}
 	default:
 		slog.WarnContext(ctx, "unhandled opcode case", "op", p.Op)
@@ -221,9 +255,17 @@ func (s *Shard) handleHeartbeatTick(ctx context.Context, st *loopState) error {
 	if !st.ackReceived {
 		return ErrNoHeartbeatAck
 	}
+
 	st.ackReceived = false
 	slog.DebugContext(ctx, "sending heartbeat")
-	return s.sendHeartbeat(ctx)
+
+	if err := s.sendHeartbeat(ctx); err != nil {
+		return fmt.Errorf("failed to send heartbeat: %w", err)
+	}
+
+	s.persistSession(ctx)
+
+	return nil
 }
 
 func (s *Shard) readFaucet(ctx context.Context, errChan chan<- error) {
@@ -261,7 +303,7 @@ func (s *Shard) sendHeartbeat(ctx context.Context) error {
 		Data *int   `json:"d"`
 	}{
 		Op:   OpHeartbeat,
-		Data: s.lastSeq,
+		Data: s.lastSequence,
 	}
 
 	data, err := json.Marshal(payload)
@@ -357,4 +399,52 @@ func (s *Shard) identify(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *Shard) resume(ctx context.Context) error {
+	payload := struct {
+		Op   Opcode         `json:"op"`
+		Data sendResumeData `json:"d"`
+	}{
+		Op: OpResume,
+		Data: sendResumeData{
+			Token:     s.token,
+			SessionID: s.session.ID,
+			Sequence:  *s.lastSequence,
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+
+	if err = s.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
+		return fmt.Errorf("failed to write resume payload: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Shard) persistSession(ctx context.Context) {
+	if s.session == nil || s.lastSequence == nil {
+		return
+	}
+
+	seq := *s.lastSequence
+	sess := Session{
+		ID:               s.session.ID,
+		ResumeGatewayURL: s.session.ResumeGatewayURL,
+		LastSequence:     &seq,
+	}
+
+	putCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
+	defer cancel()
+
+	if err := s.sessionStore.PutSession(putCtx, s.id, sess); err != nil {
+		slog.ErrorContext(ctx, "failed to persist session", "shard_id", s.id, "err", err)
+	}
 }

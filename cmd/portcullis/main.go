@@ -89,14 +89,20 @@ func main() {
 		ctx, "Starting shard manager", "url", resp.URL, "intents", intents, "numShards", resp.Shards,
 	)
 
+	if err = reconcileProxyState(ctx, js, int(intents), resp.Shards); err != nil {
+		slog.Error("failed to reconcile proxy state", "err", err)
+		os.Exit(1)
+	}
+
 	manager := gateway.NewShardManager(
 		gateway.ShardManagerConfig{
-			URL:          resp.URL,
-			Token:        token,
-			Intents:      int(intents),
-			NumShards:    resp.Shards,
-			Publisher:    js,
-			SessionStore: js,
+			URL:            resp.URL,
+			Token:          token,
+			Intents:        int(intents),
+			NumShards:      resp.Shards,
+			Publisher:      js,
+			SessionStore:   js,
+			MaxConcurrency: resp.SessionStartLimit.MaxConcurrency,
 		},
 	)
 
@@ -105,9 +111,73 @@ func main() {
 		os.Exit(1)
 	}
 
-	<-ctx.Done()
-	slog.Info("Shutting down")
+	fatal := make(chan error, 1)
+	for id := range resp.Shards {
+		go func() {
+			if wErr := manager.WaitForShard(id); wErr != nil {
+				select {
+				case fatal <- fmt.Errorf("failed to wait for shard %d: %w", id, wErr):
+				default:
+				}
+			}
+		}()
+	}
+
+	var fatalErr error
+	select {
+	case <-ctx.Done():
+		slog.Info("Shutting down")
+	case fatalErr = <-fatal:
+		slog.Error("Shard failed permanently, shutting down", "err", fatalErr)
+	}
+
 	manager.Shutdown()
+
+	if fatalErr != nil {
+		js.Close()
+		os.Exit(1)
+	}
+}
+
+func reconcileProxyState(ctx context.Context, js *jetstream.JetStream, intents, numShards int) error {
+	want := jetstream.GlobalState{
+		Intents:   gateway.Intent(intents),
+		NumShards: numShards,
+	}
+
+	stored, err := js.GetGlobalState(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get global state: %w", err)
+	}
+
+	if stored != nil && *stored == want {
+		slog.InfoContext(ctx, "global state unchanged, all sessions eligible to resume")
+		return nil
+	}
+
+	clearUpTo := want.NumShards
+	if stored != nil {
+		clearUpTo = max(clearUpTo, stored.NumShards)
+		slog.WarnContext(
+			ctx, "global state changed, clearing all sessions",
+			"old_intents", stored.Intents, "new_intents", want.Intents,
+			"old_num_shards", stored.NumShards, "new_num_shards", want.NumShards,
+		)
+	} else {
+		slog.InfoContext(ctx, "no stored global state, clearing all sessions")
+	}
+
+	for id := range clearUpTo {
+		if err := js.DeleteSession(ctx, id); err != nil {
+			return err
+		}
+	}
+
+	if gsErr := js.PutGlobalState(ctx, want); gsErr != nil {
+		return fmt.Errorf("failed to put global state: %w", gsErr)
+	}
+
+	return nil
 }
 
 type Transport struct {

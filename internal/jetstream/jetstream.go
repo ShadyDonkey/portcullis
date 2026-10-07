@@ -15,11 +15,11 @@ const (
 	eventSubjectPattern = "events.*"
 
 	// per shard session state for proxy use for fresh or resume on restart?
-	shardSessionBucketName    = "DISCORD_SHARD_SESSION_STATE"
+	shardSessionBucketName    = "PORTCULLIS_STATE"
 	shardSessionBucketHistory = 1 // TODO: do I need this defined here?
 
 	// key for holding info on the global state like intents, number of shards, etc
-	globalStateKey = "proxy-state"
+	globalStateKey = "global-state"
 )
 
 type Config struct {

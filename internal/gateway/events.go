@@ -19,6 +19,12 @@ type sendIdentifyData struct {
 	Intents        int                    `json:"intents"`
 }
 
+type sendResumeData struct {
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
+	Sequence  int    `json:"seq"`
+}
+
 type sendIdentifyProperties struct {
 	OS      string `json:"os"`
 	Browser string `json:"browser"`

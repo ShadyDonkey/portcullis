@@ -48,3 +48,15 @@ func isResumableCloseCode(code int) bool {
 
 	}
 }
+
+// isFatalCloseCode reports if reconnecting can not succeed without human
+// intervention. Docs say to stop attempting to reconnect on these to avoid
+// infinite loops.
+func isFatalCloseCode(code int) bool {
+	switch code {
+	case 4004, 4010, 4011, 4012, 4013, 4014:
+		return true
+	default:
+		return false
+	}
+}
