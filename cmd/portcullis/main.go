@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
@@ -59,14 +60,9 @@ func main() {
 	}
 
 	var resp struct {
-		URL               string `json:"url"`
-		Shards            int    `json:"shards"`
-		SessionStartLimit struct {
-			Total          int `json:"total"`
-			Remaining      int `json:"remaining"`
-			ResetAfter     int `json:"reset_after"`
-			MaxConcurrency int `json:"max_concurrency"`
-		} `json:"session_start_limit"`
+		URL               string            `json:"url"`
+		Shards            int               `json:"shards"`
+		SessionStartLimit sessionStartLimit `json:"session_start_limit"`
 	}
 
 	err = requests.
@@ -81,6 +77,30 @@ func main() {
 	}
 
 	slog.DebugContext(ctx, "Fetched gateway info", "resp", resp)
+
+	slog.Info(
+		"identify budget",
+		"remaining", resp.SessionStartLimit.Remaining,
+		"total", resp.SessionStartLimit.Total,
+		"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
+		"num_shards", resp.Shards,
+		"max_concurrency", resp.SessionStartLimit.MaxConcurrency,
+	)
+
+	if err = checkIdentifyBudget(resp.SessionStartLimit, resp.Shards); err != nil {
+		slog.Error(
+			"refusing to start, identify budget too low",
+			"remaining", resp.SessionStartLimit.Remaining,
+			"total", resp.SessionStartLimit.Total,
+			"needed", resp.Shards+identifyBudgetMargin,
+			"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
+			"fatal", true,
+			"err", err,
+		)
+
+		js.Close()
+		os.Exit(1)
+	}
 
 	// TODO: get intents from config
 	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
@@ -139,6 +159,13 @@ func main() {
 	}
 }
 
+type sessionStartLimit struct {
+	Total          int `json:"total"`
+	Remaining      int `json:"remaining"`
+	ResetAfter     int `json:"reset_after"`
+	MaxConcurrency int `json:"max_concurrency"`
+}
+
 func reconcileProxyState(ctx context.Context, js *jetstream.JetStream, intents, numShards int) error {
 	want := jetstream.GlobalState{
 		Intents:   gateway.Intent(intents),
@@ -188,4 +215,20 @@ type Transport struct {
 func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	maps.Copy(req.Header, t.Headers)
 	return t.RoundTripper.RoundTrip(req)
+}
+
+// TODO: make this configurable once config loading exists
+
+// identifyBudgetMargin is headroom for reconnect re-identifies: the guard
+// requires enough budget for every shard to identify plus this many
+// emergency re-identifies after reconnects.
+const identifyBudgetMargin = 10
+
+func checkIdentifyBudget(limit sessionStartLimit, numShards int) error {
+	needed := numShards + identifyBudgetMargin
+	if limit.Remaining < needed {
+		return fmt.Errorf("identify budget nearly exhausted, not starting")
+	}
+
+	return nil
 }

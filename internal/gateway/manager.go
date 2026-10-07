@@ -231,6 +231,7 @@ func (m *ShardManager) Statuses() map[int]ShardStatus {
 func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) {
 	var bo backoff
 	var err error
+	var consecutiveUnstable int
 
 	for {
 		startedAt := time.Now()
@@ -249,12 +250,34 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 
 		action := errorToExitAction(err)
 		if action == exitStop {
+			if closeErr, ok := errors.AsType[*CloseError](err); ok {
+				slog.ErrorContext(
+					ctx, "shard exiting permanently",
+					"shard_id", id, "code", closeErr.Code, "hint", closeCodeHint(closeErr.Code), "fatal", true,
+				)
+			}
 			err = fmt.Errorf("exit stop code received, not reconnecting: %w", err)
 			break
 		}
 
 		if time.Since(startedAt) >= reconnectStableAfter {
 			bo.reset()
+			consecutiveUnstable = 0
+		} else {
+			consecutiveUnstable++
+		}
+
+		if consecutiveUnstable >= maxConsecutiveUnstableExits {
+			err = fmt.Errorf(
+				"shard flapping: %d consecutive connections each lasted under %s, last exit: %w",
+				consecutiveUnstable, reconnectStableAfter, err,
+			)
+			slog.ErrorContext(
+				ctx, "shard flapping, not reconnecting",
+				"shard_id", id, "consecutive", consecutiveUnstable,
+				"threshold", maxConsecutiveUnstableExits, "fatal", true,
+			)
+			break
 		}
 
 		if action == exitReidentify {

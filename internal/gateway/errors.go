@@ -60,3 +60,25 @@ func isFatalCloseCode(code int) bool {
 		return false
 	}
 }
+
+// closeCodeHint returns one actionable sentence for the gateway close
+// codes for the end user.
+// Source: https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
+func closeCodeHint(code int) string {
+	switch code {
+	case 4004:
+		return "the bot token is invalid or was reset"
+	case 4010:
+		return "the shard id / shard count sent when identifying is invalid"
+	case 4011:
+		return "the bot is in too many guilds for the current shard count"
+	case 4012:
+		return "invalid API version"
+	case 4013:
+		return "the intents bitmask is invalid"
+	case 4014:
+		return "enable the privileged intents for this application in the Discord Developer Portal or remove them from the configured intents"
+	default:
+		return "unknown close code"
+	}
+}
