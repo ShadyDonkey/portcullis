@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -50,7 +51,16 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 		return nil, err
 	}
 
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(
+		nc,
+		jetstream.WithPublishAsyncMaxPending(4096),
+		jetstream.WithPublishAsyncTimeout(10*time.Second),
+		jetstream.WithPublishAsyncErrHandler(
+			func(_ jetstream.JetStream, m *nats.Msg, err error) {
+				slog.Error("jetstream publish error", "subject", m.Subject, "err", err)
+			},
+		),
+	)
 	if err != nil {
 		nc.Close()
 		return nil, err
@@ -97,7 +107,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byt
 
 	subject := fmt.Sprintf("events.%s", eventType)
 
-	if _, err := j.js.Publish(ctx, subject, payload); err != nil {
+	if _, err := j.js.PublishAsync(subject, payload); err != nil {
 		return fmt.Errorf("publish: %w", err)
 	}
 
@@ -105,6 +115,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byt
 }
 
 func (j *JetStream) Close() {
+	<-j.js.PublishAsyncComplete()
 	if err := j.nc.Drain(); err != nil {
 		slog.Error("failed to drain NATS connection", "err", err)
 	}

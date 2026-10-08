@@ -10,6 +10,7 @@ type RecvReadyData struct {
 	Shard            *[2]int `json:"shard"`
 }
 
+// TODO: do we need compress and large_threshold here?
 type sendIdentifyData struct {
 	Token          string                 `json:"token"`
 	Properties     sendIdentifyProperties `json:"properties"`

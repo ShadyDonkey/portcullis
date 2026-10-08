@@ -107,7 +107,7 @@ func (m *ShardManager) Shutdown() {
 	select {
 	case <-done:
 	case <-time.After(shardShutdownTimeout):
-		slog.Error("shutdown timed out, shards may have no exited cleanly", "timeout", shardShutdownTimeout)
+		slog.Error("shutdown timed out, shards may have not exited cleanly", "timeout", shardShutdownTimeout)
 	}
 }
 

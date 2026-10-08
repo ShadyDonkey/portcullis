@@ -69,11 +69,12 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 	}
 
 	c, _, dialErr := websocket.Dial(ctx, dialURL, nil)
-	c.SetReadLimit(websocketMaxMessageSize)
 
 	if dialErr != nil {
 		return nil, fmt.Errorf("failed to dial websocket: %w", dialErr)
 	}
+
+	c.SetReadLimit(websocketMaxMessageSize)
 
 	shard := &Shard{
 		id:           config.ID,
@@ -235,12 +236,6 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 		if !resumable {
 			s.session = nil
 			s.lastSequence = nil
-			deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
-			defer cancel()
-
-			if err := s.sessionStore.DeleteSession(deleteCtx, s.id); err != nil {
-				slog.ErrorContext(ctx, "failed to delete session", "shard_id", s.id, "err", err)
-			}
 		}
 
 		return &InvalidSessionError{Resumable: resumable}
@@ -260,7 +255,7 @@ func (s *Shard) handleHeartbeatTick(ctx context.Context, st *loopState) error {
 	slog.DebugContext(ctx, "sending heartbeat")
 
 	if err := s.sendHeartbeat(ctx); err != nil {
-		return fmt.Errorf("failed to send heartbeat: %w", err)
+		return fmt.Errorf("failed to send heartbeat (shard ID %d): %w", s.id, err)
 	}
 
 	s.persistSession(ctx)

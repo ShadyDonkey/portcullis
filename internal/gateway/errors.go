@@ -39,13 +39,10 @@ func (e *CloseError) Unwrap() error { return e.Err }
 // Source: https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
 func isResumableCloseCode(code int) bool {
 	switch code {
-	case 4000, 4001, 4002, 4003, 4005, 4007, 4008, 4009:
+	case 4000, 4001, 4002, 4003, 4005, 4008:
 		return true
-	case 4004, 4006, 4010, 4011, 4012, 4013, 4014:
-		return false
 	default:
 		return false
-
 	}
 }
 
