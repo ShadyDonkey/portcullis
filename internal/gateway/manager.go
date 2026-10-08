@@ -107,7 +107,18 @@ func (m *ShardManager) Shutdown() {
 	select {
 	case <-done:
 	case <-time.After(shardShutdownTimeout):
-		slog.Error("shutdown timed out, shards may have not exited cleanly", "timeout", shardShutdownTimeout)
+		m.mu.Lock()
+		var stuck []int
+		for id, ms := range m.shards {
+			select {
+			case <-ms.done:
+			default:
+				stuck = append(stuck, id)
+			}
+		}
+		m.mu.Unlock()
+		slog.Error("shutdown timed out, shards may have not exited cleanly",
+			"timeout", shardShutdownTimeout, "stuck_shards", stuck)
 	}
 }
 
@@ -260,6 +271,10 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 			break
 		}
 
+		if action == exitReidentify {
+			m.discardSession(ctx, id)
+		}
+
 		if time.Since(startedAt) >= reconnectStableAfter {
 			bo.reset()
 			consecutiveUnstable = 0
@@ -278,10 +293,6 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 				"threshold", maxConsecutiveUnstableExits, "fatal", true,
 			)
 			break
-		}
-
-		if action == exitReidentify {
-			m.discardSession(ctx, id)
 		}
 
 		var shard *Shard

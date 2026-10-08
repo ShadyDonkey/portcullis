@@ -128,6 +128,7 @@ func main() {
 
 	if mErr := manager.Start(ctx); mErr != nil {
 		slog.Error("Failed to start shard manager", "err", mErr)
+		js.Close()
 		os.Exit(1)
 	}
 

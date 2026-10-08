@@ -41,6 +41,10 @@ func isResumableCloseCode(code int) bool {
 	switch code {
 	case 4000, 4001, 4002, 4003, 4005, 4008:
 		return true
+	case 4006:
+		// Not in Discord's published close-code table; kept explicit as
+		// non-resumable (fresh Identify).
+		return false
 	default:
 		return false
 	}

@@ -46,7 +46,9 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 		return nil, errors.New("jetstream config user or password is empty")
 	}
 
-	nc, err := nats.Connect(config.URL, nats.UserInfo(config.User, config.Password))
+	nc, err := nats.Connect(
+		config.URL, nats.UserInfo(config.User, config.Password), nats.FlusherTimeout(10*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}
