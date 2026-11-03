@@ -12,11 +12,7 @@ import (
 )
 
 const (
-	eventStreamName     = "DISCORD_EVENTS"
-	eventSubjectPattern = "events.*"
-
 	// per shard session state for proxy use for fresh or resume on restart?
-	shardSessionBucketName    = "PORTCULLIS_STATE"
 	shardSessionBucketHistory = 1 // TODO: do I need this defined here?
 
 	// key for holding info on the global state like intents, number of shards, etc
@@ -24,7 +20,13 @@ const (
 )
 
 type Config struct {
-	URL string
+	URL            string
+	ConnectionName string // TODO: add this
+	StateBucket    string
+	StreamName     string
+	SubjectPrefix  string
+	MaxAge         time.Duration
+	MaxBytes       int64
 
 	// TODO: these may be replaced later by NKey or JWT depending on which path I go
 	User     string
@@ -70,10 +72,14 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 	_, err = js.CreateOrUpdateStream(
 		ctx, jetstream.StreamConfig{
-			Name:      eventStreamName,
-			Subjects:  []string{eventSubjectPattern},
+			Name: config.StreamName,
+			Subjects: []string{
+				fmt.Sprintf("%s.*", config.SubjectPrefix),
+			},
 			Retention: jetstream.WorkQueuePolicy,
 			Storage:   jetstream.FileStorage,
+			MaxBytes:  config.MaxBytes,
+			MaxAge:    config.MaxAge,
 		},
 	)
 
@@ -84,7 +90,7 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 	kv, err := js.CreateOrUpdateKeyValue(
 		ctx, jetstream.KeyValueConfig{
-			Bucket:  shardSessionBucketName,
+			Bucket:  config.StateBucket,
 			History: shardSessionBucketHistory,
 			Storage: jetstream.FileStorage,
 		},

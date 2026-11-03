@@ -1,0 +1,58 @@
+[discord]
+token="${DISCORD_TOKEN}"
+
+intents = [
+    "GUILDS",
+    "GUILD_MESSAGES",
+    "MESSAGE_CONTENT"
+]
+
+[discord.sharding]
+#shard_count_override=100 # overrides and disables the internal resharding
+reshard_check_interval="24h"
+
+[portcullis]
+publish = [
+    "MESSAGE_CREATE",
+    "MESSAGE_DELETE",
+    # "*" # all events retrived to be published
+]
+
+[nats]
+url="${NATS_URL}"
+username="${NATS_USERNAME}"
+password="${NATS_PASSWORD}"
+#connection_name="portcullis" # optional, defaults to portcullis for monitoring?
+
+[nats.kv]
+#state_bucket="PORTCULLIS_STATE" # optional
+
+[nats.stream]
+#name="DISCORD_EVENTS" # optional
+#subject_prefix="events" # optional
+#max_age="24h" # optional
+#max_bytes="1GB" # optional
+
+[http]
+enabled=false
+listen=":3030"
+
+[http.auth]
+key="${HTTP_AUTH_KEY}"
+#header="Authorization: Bearer" # optional, override the default pattern
+
+[http.healthz]
+require_auth=true
+show_stats=true
+
+# TODO: need to check against, for example, betterstack
+[observability] # defaults to everything disabled
+# Everything is fed from standard OTEL_* env vars
+otel_enabled=false
+# Fed from SENTRY_* env vars
+sentry_enabled=false
+
+# slog configs
+[log]
+level="info"
+format="json" # string for pretty logging in local? mainly for log dumping

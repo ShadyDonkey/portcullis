@@ -28,6 +28,8 @@ type ShardManagerConfig struct {
 	MaxConcurrency int
 	Publisher      EventPublisher
 	SessionStore   SessionStore
+	// TODO: this is unused at the moment?
+	ReshardInterval time.Duration
 }
 
 type managedShard struct {
@@ -117,8 +119,10 @@ func (m *ShardManager) Shutdown() {
 			}
 		}
 		m.mu.Unlock()
-		slog.Error("shutdown timed out, shards may have not exited cleanly",
-			"timeout", shardShutdownTimeout, "stuck_shards", stuck)
+		slog.Error(
+			"shutdown timed out, shards may have not exited cleanly",
+			"timeout", shardShutdownTimeout, "stuck_shards", stuck,
+		)
 	}
 }
 

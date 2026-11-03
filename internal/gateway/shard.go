@@ -221,6 +221,7 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 
 		slog.Debug("received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
 
+		// TODO: Add event filter here.
 		if err := s.publisher.Publish(ctx, p.Type, p.Data); err != nil {
 			slog.ErrorContext(ctx, "failed to publish event", "err", err, "type", p.Type, "seq", p.Sequence)
 		}

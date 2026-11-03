@@ -11,48 +11,70 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/carlmjohnson/requests"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, cfgErr := config.Load()
+	if cfgErr != nil {
+		return cfgErr
+	}
+
+	logger := newLogger(cfg.Log)
+	slog.SetDefault(logger)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	token := os.Getenv("DISCORD_TOKEN")
+	if cfg.Observability.OtelEnabled {
+		// TODO: enable otel
+	}
 
-	// TODO: get this from config
-	slog.SetDefault(
-		slog.New(
-			slog.NewTextHandler(
-				os.Stdout, &slog.HandlerOptions{
-					Level: slog.LevelDebug,
-				},
-			),
-		),
-	)
+	if cfg.Observability.SentryEnabled {
+		// TODO: enable sentry
+	}
 
-	js, err := jetstream.New(
+	intents, intentsParseErr := gateway.ParseIntents(cfg.Discord.Intents)
+
+	if intentsParseErr != nil {
+		return intentsParseErr
+	}
+
+	js, jsErr := jetstream.New(
 		ctx, jetstream.Config{
-			URL:      "localhost:4222",
-			User:     "portcullis",
-			Password: "supersecret",
+			URL:            cfg.NATS.URL.String(),
+			User:           cfg.NATS.Username.String(),
+			Password:       cfg.NATS.Password.Reveal(),
+			ConnectionName: cfg.NATS.ConnectionName,
+			StateBucket:    cfg.NATS.KV.StateBucket,
+			StreamName:     cfg.NATS.Stream.Name,
+			SubjectPrefix:  cfg.NATS.Stream.SubjectPrefix,
+			MaxAge:         time.Duration(cfg.NATS.Stream.MaxAge),
+			MaxBytes:       int64(cfg.NATS.Stream.MaxBytes),
 		},
 	)
 
-	if err != nil {
-		slog.Error("Failed to connect to jetstream", "err", err)
-		os.Exit(1)
+	if jsErr != nil {
+		return jsErr
 	}
-
 	defer js.Close()
 
 	httpClient := &http.Client{
+		Timeout: 15 * time.Second,
 		Transport: Transport{
 			RoundTripper: http.DefaultTransport,
 			Headers: http.Header{
-				"Authorization": {fmt.Sprintf("Bot %s", token)},
+				"Authorization": {fmt.Sprintf("Bot %s", cfg.Discord.Token.Reveal())},
 				// TODO: replace with real build version
 				"User-Agent": {fmt.Sprintf("DiscordBot (https://portcullisgw.com, %s)", "0.0.0")},
 			},
@@ -65,99 +87,129 @@ func main() {
 		SessionStartLimit sessionStartLimit `json:"session_start_limit"`
 	}
 
-	err = requests.
+	reqErr := requests.
 		URL("https://discord.com/api/v10/gateway/bot").
 		Client(httpClient).
 		ToJSON(&resp).
 		Fetch(ctx)
 
-	if err != nil {
-		slog.Error("Failed to fetch", "err", err)
-		os.Exit(1)
+	if reqErr != nil {
+		return reqErr
 	}
 
 	slog.DebugContext(ctx, "Fetched gateway info", "resp", resp)
 
-	slog.Info(
+	numShards := resp.Shards
+	var reshardInterval time.Duration
+
+	if o := cfg.Discord.Sharding.ShardCountOverride; o != nil {
+		if *o < resp.Shards {
+			slog.WarnContext(
+				ctx, "shard_count_override is below Discord's recommendation", "override", *o, "recommended",
+				resp.Shards,
+			)
+		}
+
+		numShards = *o
+	} else {
+		reshardInterval = time.Duration(*cfg.Discord.Sharding.ReshardCheckInterval)
+	}
+
+	slog.DebugContext(
+		ctx,
 		"identify budget",
 		"remaining", resp.SessionStartLimit.Remaining,
 		"total", resp.SessionStartLimit.Total,
 		"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
-		"num_shards", resp.Shards,
+		"num_shards", numShards,
 		"max_concurrency", resp.SessionStartLimit.MaxConcurrency,
 	)
 
-	if err = checkIdentifyBudget(resp.SessionStartLimit, resp.Shards); err != nil {
-		slog.Error(
+	if budgetErr := checkIdentifyBudget(resp.SessionStartLimit, numShards); budgetErr != nil {
+		slog.ErrorContext(
+			ctx,
 			"refusing to start, identify budget too low",
 			"remaining", resp.SessionStartLimit.Remaining,
 			"total", resp.SessionStartLimit.Total,
-			"needed", resp.Shards+identifyBudgetMargin,
+			"needed", numShards+identifyBudgetMargin,
 			"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
 			"fatal", true,
-			"err", err,
+			"err", budgetErr,
 		)
 
-		js.Close()
-		os.Exit(1)
+		return budgetErr
 	}
-
-	// TODO: get intents from config
-	const intents = gateway.IntentGuilds | gateway.IntentGuildMessages | gateway.IntentMessageContent
 
 	slog.DebugContext(
-		ctx, "Starting shard manager", "url", resp.URL, "intents", intents, "numShards", resp.Shards,
+		ctx, "Starting shard manager", "url", resp.URL, "intents", intents, "num_shards", numShards,
 	)
 
-	if err = reconcileProxyState(ctx, js, int(intents), resp.Shards); err != nil {
-		slog.Error("failed to reconcile proxy state", "err", err)
-		os.Exit(1)
+	if stateErr := reconcileProxyState(ctx, js, int(intents), numShards); stateErr != nil {
+		slog.ErrorContext(ctx, "failed to reconcile proxy state", "err", stateErr)
+
+		return stateErr
 	}
 
-	manager := gateway.NewShardManager(
+	shardManager := gateway.NewShardManager(
 		gateway.ShardManagerConfig{
-			URL:            resp.URL,
-			Token:          token,
-			Intents:        int(intents),
-			NumShards:      resp.Shards,
-			Publisher:      js,
-			SessionStore:   js,
-			MaxConcurrency: resp.SessionStartLimit.MaxConcurrency,
+			URL:             resp.URL,
+			Token:           cfg.Discord.Token.Reveal(),
+			Intents:         int(intents),
+			NumShards:       numShards,
+			Publisher:       js,
+			SessionStore:    js,
+			MaxConcurrency:  resp.SessionStartLimit.MaxConcurrency,
+			ReshardInterval: reshardInterval,
+			// TODO: Add a filtering system for events? Maybe this can go somewhere else for now.
 		},
 	)
 
-	if mErr := manager.Start(ctx); mErr != nil {
-		slog.Error("Failed to start shard manager", "err", mErr)
-		js.Close()
-		os.Exit(1)
+	if startErr := shardManager.Start(ctx); startErr != nil {
+		slog.ErrorContext(ctx, "failed to start shard manager", "err", startErr)
+		return startErr
 	}
 
 	fatal := make(chan error, 1)
-	for id := range resp.Shards {
+	for id := range numShards {
 		go func() {
-			if wErr := manager.WaitForShard(id); wErr != nil {
+			if wErr := shardManager.WaitForShard(id); wErr != nil {
 				select {
-				case fatal <- fmt.Errorf("failed to wait for shard %d: %w", id, wErr):
+				case fatal <- fmt.Errorf("shard %d failed: %w", id, wErr):
 				default:
 				}
 			}
 		}()
 	}
 
-	var fatalErr error
+	if cfg.HTTP.Enabled {
+		// TODO: this
+	}
+
+	var runErr error
 	select {
 	case <-ctx.Done():
 		slog.Info("Shutting down")
-	case fatalErr = <-fatal:
-		slog.Error("Shard failed permanently, shutting down", "err", fatalErr)
+
+	case runErr = <-fatal:
+		slog.ErrorContext(ctx, "fatal shard error, shutting down", "err", runErr)
 	}
 
-	manager.Shutdown()
+	stop()
+	shardManager.Shutdown()
 
-	if fatalErr != nil {
-		js.Close()
-		os.Exit(1)
+	return runErr
+}
+
+func newLogger(c config.LogConfig) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level: c.Level,
 	}
+
+	if c.Format == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
 }
 
 type sessionStartLimit struct {
@@ -214,11 +266,10 @@ type Transport struct {
 }
 
 func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
 	maps.Copy(req.Header, t.Headers)
 	return t.RoundTripper.RoundTrip(req)
 }
-
-// TODO: make this configurable once config loading exists
 
 // identifyBudgetMargin is headroom for reconnect re-identifies: the guard
 // requires enough budget for every shard to identify plus this many
