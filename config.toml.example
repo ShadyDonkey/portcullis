@@ -35,7 +35,7 @@ password="${NATS_PASSWORD}"
 
 [http]
 enabled=false
-listen=":3030"
+listen=":3333"
 
 [http.auth]
 key="${HTTP_AUTH_KEY}"
