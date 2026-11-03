@@ -85,7 +85,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf(format, args...))
 	}
 
-	required := func(key string, missing []string, value string) {
+	required := func(key string, missing []string, empty bool) {
 		switch {
 		case len(missing) > 0:
 			refs := make([]string, len(missing))
@@ -94,13 +94,13 @@ func (c *Config) Validate() error {
 			}
 
 			add("%s: %s is not set", key, strings.Join(refs, ", "))
-		case value == "":
+		case empty:
 			add("%s is required and must not be empty", key)
 		}
 	}
 
 	// [discord]
-	required("discord.token", c.Discord.Token.Missing(), c.Discord.Token.Reveal())
+	required("discord.token", c.Discord.Token.Missing(), c.Discord.Token.IsEmpty())
 	if len(c.Discord.Intents) == 0 {
 		add("discord.intents: at least one intent is required")
 	}
@@ -141,9 +141,9 @@ func (c *Config) Validate() error {
 	}
 
 	// [nats]
-	required("nats.url", c.NATS.URL.Missing(), c.NATS.URL.String())
-	required("nats.username", c.NATS.Username.Missing(), c.NATS.Username.String())
-	required("nats.password", c.NATS.Password.Missing(), c.NATS.Password.Reveal())
+	required("nats.url", c.NATS.URL.Missing(), c.NATS.URL.String() == "")
+	required("nats.username", c.NATS.Username.Missing(), c.NATS.Username.String() == "")
+	required("nats.password", c.NATS.Password.Missing(), c.NATS.Password.IsEmpty())
 
 	if c.NATS.ConnectionName == "" {
 		add("nats.connection_name must not be empty")
@@ -180,7 +180,7 @@ func (c *Config) Validate() error {
 			)
 		}
 
-		required("http.auth.key", c.HTTP.Auth.Key.Missing(), c.HTTP.Auth.Key.Reveal())
+		required("http.auth.key", c.HTTP.Auth.Key.Missing(), c.HTTP.Auth.Key.IsEmpty())
 	}
 
 	// [observability]

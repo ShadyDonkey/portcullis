@@ -1,7 +1,10 @@
 package config
 
 import (
+	"encoding"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -108,11 +111,23 @@ func (e *EnvSecret) UnmarshalText(text []byte) error {
 	return nil
 }
 
-func (e *EnvSecret) String() string {
+func (EnvSecret) String() string {
 	return redacted
 }
 
-func (e *EnvSecret) Reveal() string {
+func (EnvSecret) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, redacted)
+}
+
+func (EnvSecret) MarshalText() ([]byte, error) {
+	return []byte(redacted), nil
+}
+
+func (EnvSecret) LogValue() slog.Value {
+	return slog.StringValue(redacted)
+}
+
+func (e EnvSecret) Reveal() string {
 	return e.value
 }
 
@@ -120,9 +135,16 @@ func (e *EnvSecret) Missing() []string {
 	return e.missing
 }
 
-func (e *EnvSecret) MarshalText() ([]byte, error) {
-	return []byte(e.value), nil
+func (e EnvSecret) IsEmpty() bool {
+	return e.value == ""
 }
+
+var (
+	_ fmt.Stringer           = EnvSecret{}
+	_ fmt.Formatter          = EnvSecret{}
+	_ encoding.TextMarshaler = EnvSecret{}
+	_ slog.LogValuer         = EnvSecret{}
+)
 
 func expand(s string) (out string, missing []string, err error) {
 	var b strings.Builder
