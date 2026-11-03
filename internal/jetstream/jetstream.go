@@ -21,7 +21,7 @@ const (
 
 type Config struct {
 	URL            string
-	ConnectionName string // TODO: add this
+	ConnectionName string
 	StateBucket    string
 	StreamName     string
 	SubjectPrefix  string
@@ -50,7 +50,10 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 	}
 
 	nc, err := nats.Connect(
-		config.URL, nats.UserInfo(config.User, config.Password), nats.FlusherTimeout(10*time.Second),
+		config.URL,
+		nats.UserInfo(config.User, config.Password),
+		nats.FlusherTimeout(10*time.Second),
+		nats.Name(config.ConnectionName),
 	)
 	if err != nil {
 		return nil, err

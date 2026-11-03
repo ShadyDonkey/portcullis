@@ -208,9 +208,6 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 			s.session = &Session{
 				ID:               ready.SessionID,
 				ResumeGatewayURL: ready.ResumeGatewayURL,
-
-				// TODO: do I still need to do last sequence assignment?
-				// LastSequence:     s.lastSequence,
 			}
 
 			s.persistSession(ctx)
