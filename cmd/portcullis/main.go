@@ -160,7 +160,7 @@ func run() error {
 			SessionStore:    js,
 			MaxConcurrency:  resp.SessionStartLimit.MaxConcurrency,
 			ReshardInterval: reshardInterval,
-			// TODO: Add a filtering system for events? Maybe this can go somewhere else for now.
+			Filter:          gateway.NewEventFilter(cfg.Portcullis.Publish),
 		},
 	)
 

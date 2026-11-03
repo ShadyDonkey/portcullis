@@ -30,6 +30,7 @@ type Shard struct {
 	publisher    EventPublisher
 	sessionStore SessionStore
 	session      *Session
+	filter       EventFilter
 }
 
 type ShardConfig struct {
@@ -41,6 +42,7 @@ type ShardConfig struct {
 	Publisher       EventPublisher
 	SessionStore    SessionStore
 	IdentifyLimiter *bucketLimiter
+	Filter          EventFilter
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
@@ -87,6 +89,7 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 		numShards:    config.NumShards,
 		publisher:    config.Publisher,
 		sessionStore: config.SessionStore,
+		filter:       config.Filter,
 	}
 
 	return shard, nil
@@ -219,9 +222,13 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 			return nil
 		}
 
-		slog.Debug("received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
+		slog.DebugContext(ctx, "received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
 
-		// TODO: Add event filter here.
+		if !s.filter.Allow(p.Type) {
+			slog.DebugContext(ctx, "disallowed event", "type", p.Type, "data", p.Data)
+			return nil
+		}
+
 		if err := s.publisher.Publish(ctx, p.Type, p.Data); err != nil {
 			slog.ErrorContext(ctx, "failed to publish event", "err", err, "type", p.Type, "seq", p.Sequence)
 		}

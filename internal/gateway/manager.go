@@ -28,6 +28,7 @@ type ShardManagerConfig struct {
 	MaxConcurrency int
 	Publisher      EventPublisher
 	SessionStore   SessionStore
+	Filter         EventFilter
 	// TODO: this is unused at the moment?
 	ReshardInterval time.Duration
 }
@@ -375,5 +376,6 @@ func (m *ShardManager) idToShardConfig(id int) ShardConfig {
 		Publisher:       m.config.Publisher,
 		SessionStore:    m.config.SessionStore,
 		IdentifyLimiter: m.identify,
+		Filter:          m.config.Filter,
 	}
 }
