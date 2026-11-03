@@ -34,9 +34,10 @@ type Config struct {
 }
 
 type JetStream struct {
-	nc *nats.Conn
-	js jetstream.JetStream
-	kv jetstream.KeyValue
+	nc            *nats.Conn
+	js            jetstream.JetStream
+	kv            jetstream.KeyValue
+	subjectPrefix string
 }
 
 func New(ctx context.Context, config Config) (*JetStream, error) {
@@ -102,9 +103,10 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 	}
 
 	return &JetStream{
-		nc: nc,
-		js: js,
-		kv: kv,
+		nc:            nc,
+		js:            js,
+		kv:            kv,
+		subjectPrefix: config.SubjectPrefix,
 	}, nil
 }
 
@@ -113,7 +115,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byt
 		return fmt.Errorf("publish: event type is empty")
 	}
 
-	subject := fmt.Sprintf("events.%s", eventType)
+	subject := fmt.Sprintf("%s.%s", j.subjectPrefix, eventType)
 
 	if _, err := j.js.PublishAsync(subject, payload); err != nil {
 		return fmt.Errorf("publish: %w", err)

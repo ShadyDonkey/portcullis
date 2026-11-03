@@ -38,6 +38,9 @@ func defaults() *Config {
 				RequireAuth: true,
 				ShowStats:   false,
 			},
+			Auth: HTTPAuthConfig{
+				Header: "X-API-Key",
+			},
 		},
 		Log: LogConfig{
 			Level:  slog.LevelInfo,

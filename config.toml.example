@@ -39,11 +39,11 @@ listen=":3333"
 
 [http.auth]
 key="${HTTP_AUTH_KEY}"
-#header="Authorization: Bearer" # optional, override the default pattern
+#header="X-API-Key" # optional, override the default pattern
 
 [http.healthz]
 require_auth=true
-show_stats=true
+show_stats=false
 
 # TODO: need to check against, for example, betterstack
 [observability] # defaults to everything disabled
