@@ -193,6 +193,8 @@ func run() error {
 
 	case runErr = <-fatal:
 		slog.ErrorContext(ctx, "fatal shard error, shutting down", "err", runErr)
+	case runErr = <-js.UnexpectedClose():
+		slog.ErrorContext(ctx, "NATS connection closed, shutting down", "err", runErr)
 	}
 
 	stop()

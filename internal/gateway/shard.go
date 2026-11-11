@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -23,6 +24,7 @@ type Shard struct {
 	id           int
 	conn         *websocket.Conn
 	inbound      chan IncomingPayload
+	ackReceived  atomic.Bool
 	lastSequence *int
 	token        string
 	intents      int
@@ -92,6 +94,8 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 		filter:       config.Filter,
 	}
 
+	shard.ackReceived.Store(true)
+
 	return shard, nil
 }
 
@@ -107,7 +111,7 @@ func (s *Shard) Start(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go s.readFaucet(runCtx, errCh)
 
-	st := &loopState{ackReceived: true}
+	st := &loopState{}
 
 	helloTimer := time.NewTimer(helloTimeout)
 	defer helloTimer.Stop()
@@ -141,7 +145,6 @@ func (s *Shard) Start(ctx context.Context) error {
 
 type loopState struct {
 	heartbeatCh <-chan time.Time
-	ackReceived bool
 	identified  bool
 }
 
@@ -175,9 +178,6 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 
 			st.identified = true
 		}
-
-	case OpHeartbeatAck:
-		st.ackReceived = true
 
 	case OpHeartbeat:
 		if err := s.sendHeartbeat(ctx); err != nil {
@@ -219,16 +219,19 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 			return nil
 		}
 
-		slog.DebugContext(ctx, "received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
+		if slog.Default().Enabled(ctx, slog.LevelDebug) {
+			slog.DebugContext(ctx, "received event", "type", p.Type, "data", p.Data, "seq", p.Sequence)
+		}
 
 		if !s.filter.Allow(p.Type) {
-			slog.DebugContext(ctx, "disallowed event", "type", p.Type, "data", p.Data)
+			if slog.Default().Enabled(ctx, slog.LevelDebug) {
+				slog.DebugContext(ctx, "disallowed event", "type", p.Type, "data", p.Data)
+			}
+
 			return nil
 		}
 
-		if err := s.publisher.Publish(ctx, p.Type, p.Data); err != nil {
-			slog.ErrorContext(ctx, "failed to publish event", "err", err, "type", p.Type, "seq", p.Sequence)
-		}
+		_ = s.publisher.Publish(ctx, p.Type, p.Data)
 
 		return nil
 
@@ -252,11 +255,10 @@ func (s *Shard) handlePayload(ctx, runCtx context.Context, p IncomingPayload, st
 }
 
 func (s *Shard) handleHeartbeatTick(ctx context.Context, st *loopState) error {
-	if !st.ackReceived {
+	if !s.ackReceived.Swap(false) {
 		return ErrNoHeartbeatAck
 	}
 
-	st.ackReceived = false
 	slog.DebugContext(ctx, "sending heartbeat")
 
 	if err := s.sendHeartbeat(ctx); err != nil {
@@ -286,6 +288,11 @@ func (s *Shard) readFaucet(ctx context.Context, errChan chan<- error) {
 		var payload IncomingPayload
 		if unmarshalErr := json.Unmarshal(data, &payload); unmarshalErr != nil {
 			slog.ErrorContext(ctx, "failed to unmarshal payload", "err", unmarshalErr)
+			continue
+		}
+
+		if payload.Op == OpHeartbeatAck {
+			s.ackReceived.Store(true)
 			continue
 		}
 
