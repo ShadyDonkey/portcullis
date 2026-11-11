@@ -87,6 +87,7 @@ func run() error {
 		SessionStartLimit sessionStartLimit `json:"session_start_limit"`
 	}
 
+	// TODO: Add config do the base URL (ref: nirn)
 	reqErr := requests.
 		URL("https://discord.com/api/v10/gateway/bot").
 		Client(httpClient).
