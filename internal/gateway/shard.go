@@ -72,6 +72,12 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 		}
 	}
 
+	dialURL, err = withGatewayParams(dialURL)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse gateway URL: %w", err)
+	}
+
 	c, _, dialErr := websocket.Dial(ctx, dialURL, nil)
 
 	if dialErr != nil {
