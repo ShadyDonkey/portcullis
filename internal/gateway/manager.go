@@ -258,9 +258,7 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 		}
 
 		if ctx.Err() != nil {
-			if err != nil && errors.Is(err, ctx.Err()) {
-				err = nil
-			}
+			err = nil
 			break
 		}
 
@@ -276,8 +274,9 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 			break
 		}
 
+		var forceFresh bool
 		if action == exitReidentify {
-			m.discardSession(ctx, id)
+			forceFresh = m.discardSession(ctx, id) != nil
 		}
 
 		if time.Since(startedAt) >= reconnectStableAfter {
@@ -301,9 +300,13 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 		}
 
 		var shard *Shard
-		shard, shardErr := m.reconnect(ctx, id, &bo, action, err)
+		shard, shardErr := m.reconnect(ctx, id, &bo, action, forceFresh, err)
 		if shardErr != nil {
-			err = nil
+			err = shardErr
+			if ctx.Err() != nil {
+				// tested and hit race condition on reconnect, just nil it
+				err = nil
+			}
 			break
 		}
 
@@ -324,10 +327,14 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 	}
 }
 
-func (m *ShardManager) reconnect(ctx context.Context, id int, bo *backoff, action exitAction, cause error) (
+func (m *ShardManager) reconnect(
+	ctx context.Context, id int, bo *backoff, action exitAction, forceFresh bool, cause error,
+) (
 	*Shard, error,
 ) {
+	attempts := 0
 	for {
+		attempts++
 		delay := bo.next()
 
 		if action == exitReidentify {
@@ -345,25 +352,40 @@ func (m *ShardManager) reconnect(ctx context.Context, id int, bo *backoff, actio
 			return nil, ctx.Err()
 		}
 
-		shard, err := NewShard(ctx, m.idToShardConfig(id))
+		shardCfg := m.idToShardConfig(id)
+		shardCfg.ForceFreshSession = forceFresh
+
+		shard, err := NewShard(ctx, shardCfg)
+
 		if err == nil {
 			return shard, nil
 		}
+
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+
+		if attempts >= maxDialRetries {
+			return nil, fmt.Errorf(
+				"shard: max dial retries encountered, reconnect gave up after %d attempts: %w", attempts, err,
+			)
 		}
 
 		cause = err
 	}
 }
 
-func (m *ShardManager) discardSession(ctx context.Context, id int) {
+func (m *ShardManager) discardSession(ctx context.Context, id int) error {
 	deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
 	defer cancel()
 
 	if err := m.config.SessionStore.DeleteSession(deleteCtx, id); err != nil {
 		slog.ErrorContext(ctx, "failed to discard session", "shard_id", id, "err", err)
+
+		return err
 	}
+
+	return nil
 }
 
 func (m *ShardManager) idToShardConfig(id int) ShardConfig {

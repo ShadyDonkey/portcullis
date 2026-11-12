@@ -24,4 +24,8 @@ const (
 	// then reconnecting cannot succeed, stop there instead of burning the daily
 	// identify budget on fresh identifies.
 	maxConsecutiveUnstableExits = 5
+
+	// Max retries on websocket connections to force stopping when Discord GW is down
+	// or some other network failure.
+	maxDialRetries = 30
 )

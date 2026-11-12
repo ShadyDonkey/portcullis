@@ -193,6 +193,9 @@ func run() (returnErr error) {
 				select {
 				case fatal <- fmt.Errorf("shard %d failed: %w", id, wErr):
 				default:
+					slog.WarnContext(
+						ctx, fmt.Sprintf("additional shard failure on %d", id), "shard_id", id, "err", wErr,
+					)
 				}
 			}
 		}()

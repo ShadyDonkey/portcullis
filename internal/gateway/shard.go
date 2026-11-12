@@ -36,15 +36,16 @@ type Shard struct {
 }
 
 type ShardConfig struct {
-	URL             string
-	ID              int
-	Token           string
-	Intents         int
-	NumShards       int
-	Publisher       EventPublisher
-	SessionStore    SessionStore
-	IdentifyLimiter *bucketLimiter
-	Filter          EventFilter
+	URL               string
+	ID                int
+	Token             string
+	Intents           int
+	NumShards         int
+	Publisher         EventPublisher
+	SessionStore      SessionStore
+	IdentifyLimiter   *bucketLimiter
+	Filter            EventFilter
+	ForceFreshSession bool
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
@@ -57,7 +58,7 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 	var session *Session
 	var lastSequence *int
 
-	if stored != nil && stored.ID != "" && stored.ResumeGatewayURL != "" && stored.LastSequence != nil {
+	if stored != nil && !config.ForceFreshSession && stored.ID != "" && stored.ResumeGatewayURL != "" && stored.LastSequence != nil {
 		session = stored
 		seq := *stored.LastSequence
 		lastSequence = &seq
@@ -458,6 +459,6 @@ func (s *Shard) persistSession(ctx context.Context) {
 	defer cancel()
 
 	if err := s.sessionStore.PutSession(putCtx, s.id, sess); err != nil {
-		slog.ErrorContext(ctx, "failed to persist session", "shard_id", s.id, "err", err)
+		slog.WarnContext(ctx, fmt.Sprintf("failed to persist session for shard %d", s.id), "shard_id", s.id, "err", err)
 	}
 }

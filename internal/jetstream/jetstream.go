@@ -155,6 +155,7 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 	)
 
 	if err != nil {
+		j.closing.Store(true)
 		nc.Close()
 		return nil, err
 	}
