@@ -3,7 +3,6 @@ name: portcullis_dev
 services:
   nats:
     image: nats:2.14-alpine
-    container_name: portcullis-nats
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -14,10 +13,45 @@ services:
       - nats-data:/data
       - ./nats-server.conf:/etc/nats/nats-server.conf:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz" ]
       interval: 5s
       timeout: 3s
       retries: 5
 
+  lgtm:
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "3000:3000"   # Grafana
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+  glitchtip-db:
+    image: postgres:18
+    command: -c max_locks_per_transaction=512
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    volumes:
+      - glitchtip-pg:/var/lib/postgresql
+
+  glitchtip:
+    image: glitchtip/glitchtip:7
+    depends_on: [ glitchtip-db ]
+    ports:
+      - "8000:8000"
+    environment:
+      SERVER_ROLE: all_in_one
+      DATABASE_URL: postgres://postgres:postgres@glitchtip-db:5432/postgres
+      VALKEY_URL: ""
+      SECRET_KEY: super-secret-key
+      EMAIL_URL: consolemail://
+      GLITCHTIP_DOMAIN: http://localhost:8000
+      DEFAULT_FROM_EMAIL: dev@localhost
+      GLITCHTIP_ENABLE_LOGS: "False"
+      GLITCHTIP_ENABLE_UPTIME: "False"
+    volumes:
+      - glitchtip-uploads:/code/uploads
+
 volumes:
   nats-data:
+  glitchtip-pg:
+  glitchtip-uploads:
