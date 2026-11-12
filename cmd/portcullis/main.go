@@ -14,6 +14,7 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
+	"github.com/ShadyDonkey/portcullis/internal/observability"
 	"github.com/carlmjohnson/requests"
 )
 
@@ -24,7 +25,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (returnErr error) {
 	cfg, cfgErr := config.Load()
 	if cfgErr != nil {
 		return cfgErr
@@ -36,13 +37,24 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.Observability.OtelEnabled {
-		// TODO: enable otel
+	obs, obsErr := observability.Setup(
+		ctx, logger, observability.Config{
+			OtelEnabled:   cfg.Observability.OtelEnabled,
+			SentryEnabled: cfg.Observability.SentryEnabled,
+			LogLevel:      cfg.Log.Level,
+		},
+	)
+
+	if obsErr != nil {
+		return obsErr
 	}
 
-	if cfg.Observability.SentryEnabled {
-		// TODO: enable sentry
-	}
+	defer func() {
+		obs.Close(returnErr)
+	}()
+
+	logger = obs.WrapLogger(logger)
+	slog.SetDefault(logger)
 
 	intents, intentsParseErr := gateway.ParseIntents(cfg.Discord.Intents)
 
@@ -168,6 +180,10 @@ func run() error {
 	if startErr := shardManager.Start(ctx); startErr != nil {
 		slog.ErrorContext(ctx, "failed to start shard manager", "err", startErr)
 		return startErr
+	}
+
+	if regErr := obs.RegisterMetrics(js.PublishStats, shardManager.Statuses); regErr != nil {
+		return regErr
 	}
 
 	fatal := make(chan error, 1)
