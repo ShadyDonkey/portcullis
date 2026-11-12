@@ -45,7 +45,6 @@ key="${HTTP_AUTH_KEY}"
 require_auth=true
 show_stats=false
 
-# TODO: need to check against, for example, betterstack
 [observability] # defaults to everything disabled
 # Everything is fed from standard OTEL_* env vars
 otel_enabled=false
