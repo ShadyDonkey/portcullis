@@ -14,11 +14,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
-	sdkmetric "go.opentelemetry.io/otel/metric"
+	otelmetric "go.opentelemetry.io/otel/metric"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 )
 
 type Config struct {
@@ -60,7 +59,7 @@ func Setup(ctx context.Context, base *slog.Logger, cfg Config) (*Observability, 
 
 		res, err := resource.New(
 			ctx,
-			resource.WithAttributes(semconv.ServiceName("portcullis")),
+			resource.WithAttributes(attribute.String("service.name", "portcullis")),
 			resource.WithFromEnv(),
 		)
 
@@ -144,10 +143,10 @@ func (o *Observability) RegisterMetrics(
 	drops, _ := m.Int64ObservableCounter("portcullis.publisher.stalled_drops")
 	syncErr, _ := m.Int64ObservableCounter("portcullis.publisher.sync_errors")
 	ackErr, _ := m.Int64ObservableCounter("portcullis.publisher.ack_errors")
-	up, _ := m.Int64ObservableCounter("portcullis.gateway.shard.up")
+	up, _ := m.Int64ObservableGauge("portcullis.gateway.shard.up")
 
 	_, err := m.RegisterCallback(
-		func(_ context.Context, ob sdkmetric.Observer) error {
+		func(_ context.Context, ob otelmetric.Observer) error {
 			s := publishStats()
 
 			ob.ObserveInt64(drops, int64(s.StalledDrops))
@@ -163,7 +162,7 @@ func (o *Observability) RegisterMetrics(
 
 				ob.ObserveInt64(
 					up, v,
-					sdkmetric.WithAttributes(
+					otelmetric.WithAttributes(
 						attribute.Int("shard_id", id),
 					),
 				)

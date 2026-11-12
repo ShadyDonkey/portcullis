@@ -177,13 +177,13 @@ func run() (returnErr error) {
 		},
 	)
 
+	if regErr := obs.RegisterMetrics(js.PublishStats, shardManager.Statuses); regErr != nil {
+		return regErr
+	}
+
 	if startErr := shardManager.Start(ctx); startErr != nil {
 		slog.ErrorContext(ctx, "failed to start shard manager", "err", startErr)
 		return startErr
-	}
-
-	if regErr := obs.RegisterMetrics(js.PublishStats, shardManager.Statuses); regErr != nil {
-		return regErr
 	}
 
 	fatal := make(chan error, 1)
