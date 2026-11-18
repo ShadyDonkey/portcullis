@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 )
 
 func (m *Manager) supervise(ctx context.Context, id int, ms *managedShard) {
@@ -77,8 +78,9 @@ func (m *Manager) supervise(ctx context.Context, id int, ms *managedShard) {
 
 		m.mu.Lock()
 		ms.shard = shard
-		ms.reconnects.Add(1)
 		m.mu.Unlock()
+
+		metrics.ShardReconnect(id)
 	}
 
 	ms.cancel()

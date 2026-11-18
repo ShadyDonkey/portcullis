@@ -7,9 +7,11 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/framepool"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/ShadyDonkey/portcullis/internal/ws"
 )
 
@@ -188,9 +190,11 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 			return
 		}
 
+		readDone := time.Now()
+
 		env, err := parseEnvelope(dec, &frameReader, frame)
 		if err != nil {
-			parseErrors.Add(1)
+			metrics.ShardDrop(metrics.DropParseError)
 			slog.ErrorContext(ctx, "failed to parse payload", "err", err)
 			framepool.Put(frame)
 			continue
@@ -207,6 +211,10 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 				return
 			}
 
+			if !env.eventTypeOverflow {
+				metrics.Dispatch(env.eventType[:env.eventTypeLen], time.Since(readDone))
+			}
+
 			continue
 		}
 
@@ -216,7 +224,7 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 		case gateway.OpHello:
 			var hello gateway.RecvHelloData
 			if err := decodeControlData(dec, &frameReader, frame, &hello); err != nil {
-				parseErrors.Add(1)
+				metrics.ShardDrop(metrics.DropParseError)
 				s.failRead(
 					ctx, errChan, frame, fmt.Errorf("failed to decode control data for hello: %w", err),
 				)
@@ -228,7 +236,7 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 		case gateway.OpInvalidSession:
 			var resumable bool
 			if err := decodeControlData(dec, &frameReader, frame, &resumable); err != nil {
-				parseErrors.Add(1)
+				metrics.ShardDrop(metrics.DropParseError)
 				slog.ErrorContext(
 					ctx, "failed to decode control data for invalid session", "op", msg.op, "err", err,
 				)
@@ -253,17 +261,18 @@ func (s *Shard) handleDispatch(
 	s.lastSequence.Store(env.seq)
 
 	if env.eventTypeOverflow || env.eventTypeLen == 0 {
-		eventOverflow.Add(1)
+		metrics.ShardDrop(metrics.DropTypeOverflow)
 		framepool.Put(frame)
 		return true
 	}
 
 	eventType := env.eventType[:env.eventTypeLen]
+	metrics.Consumed(eventType)
 
 	if bytes.Equal(eventType, eventReady) {
 		var ready gateway.RecvReadyData
 		if err := decodeControlData(dec, r, frame, &ready); err != nil {
-			parseErrors.Add(1)
+			metrics.ShardDrop(metrics.DropParseError)
 			s.failRead(
 				ctx, errChan, frame, fmt.Errorf("failed to decode control data for ready: %w", err),
 			)
@@ -313,6 +322,8 @@ func (s *Shard) handleDispatch(
 	}
 
 	if !s.filter.Allow(eventType) {
+		metrics.ShardDrop(metrics.DropFiltered)
+
 		if slog.Default().Enabled(ctx, slog.LevelDebug) {
 			slog.DebugContext(ctx, "disallowed event", "type", string(eventType), "data", string(frame))
 		}
@@ -321,6 +332,9 @@ func (s *Shard) handleDispatch(
 		return true
 	}
 
-	_ = s.publisher.Publish(ctx, eventType, frame)
+	if err := s.publisher.Publish(ctx, eventType, frame); err == nil {
+		metrics.Published(eventType)
+	}
+
 	return true
 }

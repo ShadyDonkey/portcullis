@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -35,7 +36,7 @@ func dialNATS(config Config, j *JetStream) (*nats.Conn, error) {
 		),
 		nats.ReconnectHandler(
 			func(nc *nats.Conn) {
-				j.natsReconnects.Add(1)
+				metrics.NATSReconnect()
 				slog.Info("NATS re-connected", "url", nc.ConnectedUrl())
 			},
 		),
@@ -69,14 +70,15 @@ func newPublisher(nc *nats.Conn, j *JetStream) (jetstream.JetStream, error) {
 		jetstream.WithPublishAsyncTimeout(publishAsyncAckTimeout),
 		jetstream.WithPublishAsyncAckHandler(
 			func(_ jetstream.JetStream, msg *nats.Msg, _ *jetstream.PubAck) {
+				j.completeAck(msg.Data)
 				j.releaseFrame(msg.Data)
 				signal(j.publishSignal)
 			},
 		),
 		jetstream.WithPublishAsyncErrHandler(
 			func(_ jetstream.JetStream, msg *nats.Msg, err error) {
-				j.ackErrors.Add(1)
 				j.ackFailures.record("async_ack", err, "subject", msg.Subject)
+				metrics.PublishDrop(metrics.DropAckError)
 				j.releaseFrame(msg.Data)
 				signal(j.publishSignal)
 			},

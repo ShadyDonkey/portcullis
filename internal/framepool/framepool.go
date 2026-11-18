@@ -1,9 +1,6 @@
 package framepool
 
-import (
-	"sync"
-	"sync/atomic"
-)
+import "sync"
 
 const MaxPoolSize = 4 << 20
 
@@ -27,8 +24,6 @@ var pools = [...]sync.Pool{
 	{New: func() any { return &buf4m{} }},
 }
 
-var oversizedFrames atomic.Uint64
-
 // Get returns an empty slice with capacity for at least minLength bytes,
 // suitable for appending into.
 func Get(minLength int) []byte {
@@ -46,7 +41,6 @@ func Get(minLength int) []byte {
 	case minLength <= 4<<20:
 		return pools[5].Get().(*buf4m)[:0]
 	default:
-		oversizedFrames.Add(1)
 		return make([]byte, 0, minLength)
 	}
 }
@@ -66,8 +60,4 @@ func Put(data []byte) {
 	case 4 << 20:
 		pools[5].Put((*buf4m)(data[:4<<20]))
 	}
-}
-
-func OversizedFrames() uint64 {
-	return oversizedFrames.Load()
 }

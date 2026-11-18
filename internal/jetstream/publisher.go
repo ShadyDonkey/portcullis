@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/framepool"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -28,12 +30,14 @@ func (j *JetStream) buildSubject(eventType []byte) string {
 
 func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte) error {
 	size := int64(len(frame))
+	metrics.Payload(len(frame))
 
 	j.pubMu.Lock()
 
 	if j.isStopping() {
 		j.pubMu.Unlock()
 		j.dropFailures.record(dropReasonPublishAfterClose, errors.New("publisher is closed"))
+		metrics.PublishDrop(metrics.DropAfterClose)
 		j.recycleFrame(frame)
 		return errors.New("publish: publisher is closed")
 	}
@@ -43,20 +47,19 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 
 	for j.inFlightBytes.Load()+size > inFlightByteCap {
 		if j.ringLen == 0 {
-			j.byteCapDrops.Add(1)
 			j.pubMu.Unlock()
 			j.dropFailures.record(dropReasonByteCapDrop, jetstream.ErrTooManyStalledMsgs)
+			metrics.PublishDrop(metrics.DropByteCap)
 			j.recycleFrame(frame)
 			return fmt.Errorf("publish: %w", jetstream.ErrTooManyStalledMsgs)
 		}
 
-		j.byteCapDrops.Add(1)
-		j.evictOldestLocked()
+		j.evictOldestLocked(metrics.DropByteCap)
 		byteCapEvicted = true
 	}
 
 	if j.ringLen == len(j.ring) {
-		j.evictOldestLocked()
+		j.evictOldestLocked(metrics.DropRingEvicted)
 		ringEvicted = true
 	}
 
@@ -68,6 +71,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 	j.ringLen++
 	j.ringOccupancy.Store(int64(j.ringLen))
 	j.inFlightBytes.Add(size)
+	j.trackAck(eventType, frame, time.Now())
 	j.pubMu.Unlock()
 
 	if byteCapEvicted {
@@ -82,14 +86,14 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 	return nil
 }
 
-func (j *JetStream) evictOldestLocked() {
+func (j *JetStream) evictOldestLocked(reason string) {
 	slot := &j.ring[j.ringHead]
 	frame := slot.frame
 	*slot = ringSlot{}
 	j.ringHead = (j.ringHead + 1) % len(j.ring)
 	j.ringLen--
 	j.ringOccupancy.Store(int64(j.ringLen))
-	j.ringEvictions.Add(1)
+	metrics.PublishDrop(reason)
 	j.releaseFrame(frame)
 }
 
@@ -98,6 +102,7 @@ func (j *JetStream) recycleFrame(frame []byte) {
 }
 
 func (j *JetStream) releaseFrame(frame []byte) {
+	j.untrackAck(frame)
 	framepool.Put(frame)
 	j.inFlightBytes.Add(-int64(len(frame)))
 }
@@ -147,11 +152,11 @@ func (j *JetStream) submit(slot ringSlot) {
 	_, err := j.js.PublishAsync(subject, slot.frame, jetstream.WithStallWait(publishStallWait))
 	if err != nil {
 		if errors.Is(err, jetstream.ErrTooManyStalledMsgs) {
-			j.stalledDrops.Add(1)
 			j.stallFailures.record("stalled_drop", err)
+			metrics.PublishDrop(metrics.DropStalled)
 		} else {
-			j.syncErrors.Add(1)
 			j.syncFailures.record("sync_publish", err, "subject", subject)
+			metrics.PublishDrop(metrics.DropSyncError)
 		}
 
 		j.releaseFrame(slot.frame)
@@ -160,6 +165,7 @@ func (j *JetStream) submit(slot ringSlot) {
 
 func (j *JetStream) dropSlot(slot ringSlot, kind string) {
 	j.dropFailures.record(kind, errors.New("publish dropped at shutdown"))
+	metrics.PublishDrop(metrics.DropShutdown)
 	j.releaseFrame(slot.frame)
 }
 
@@ -228,24 +234,6 @@ func signal(ch chan struct{}) {
 	}
 }
 
-type PublishStats struct {
-	StalledDrops  uint64
-	SyncErrors    uint64
-	AckErrors     uint64
-	RingEvictions uint64
-	ByteCapDrops  uint64
-	InFlightBytes uint64
-	RingOccupancy uint64
-}
-
-func (j *JetStream) PublishStats() PublishStats {
-	return PublishStats{
-		StalledDrops:  j.stalledDrops.Load(),
-		SyncErrors:    j.syncErrors.Load(),
-		AckErrors:     j.ackErrors.Load(),
-		RingEvictions: j.ringEvictions.Load(),
-		ByteCapDrops:  j.byteCapDrops.Load(),
-		InFlightBytes: uint64(j.inFlightBytes.Load()),
-		RingOccupancy: uint64(j.ringOccupancy.Load()),
-	}
+func (j *JetStream) InFlightBytes() int64 {
+	return j.inFlightBytes.Load()
 }

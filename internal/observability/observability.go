@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -85,6 +87,16 @@ func Setup(ctx context.Context, base *slog.Logger, cfg Config) (*Observability, 
 	}
 
 	return o, nil
+}
+
+const meterName = "github.com/ShadyDonkey/portcullis"
+
+func (o *Observability) Meter() otelmetric.Meter {
+	if o.meter != nil {
+		return o.meter.Meter(meterName)
+	}
+
+	return noop.NewMeterProvider().Meter(meterName)
 }
 
 func (o *Observability) Close(runErr error) {

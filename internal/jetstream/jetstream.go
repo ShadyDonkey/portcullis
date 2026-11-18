@@ -45,10 +45,6 @@ type JetStream struct {
 	subjectPrefix   string
 	closing         atomic.Bool
 	unexpectedClose chan error
-	stalledDrops    atomic.Uint64
-	syncErrors      atomic.Uint64
-	ackErrors       atomic.Uint64
-	natsReconnects  atomic.Uint64
 	stallFailures   failureLog
 	syncFailures    failureLog
 	ackFailures     failureLog
@@ -61,15 +57,15 @@ type JetStream struct {
 	ringOccupancy atomic.Int64
 
 	inFlightBytes atomic.Int64
+	ackMu         sync.Mutex
+	ackPending    map[uintptr]ackInfo
 
 	publishSignal chan struct{}
 	stopCh        chan struct{}
 	drainStopped  chan struct{}
 	drainDone     chan struct{}
 
-	ringEvictions atomic.Uint64
-	byteCapDrops  atomic.Uint64
-	dropFailures  failureLog
+	dropFailures failureLog
 }
 
 func New(ctx context.Context, config Config) (*JetStream, error) {
@@ -83,6 +79,7 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 	j := &JetStream{
 		subjectPrefix:   config.SubjectPrefix,
+		ackPending:      make(map[uintptr]ackInfo),
 		unexpectedClose: make(chan error, 1),
 		ringSignal:      make(chan struct{}, 1),
 		publishSignal:   make(chan struct{}, 1),
@@ -148,10 +145,6 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 func (j *JetStream) UnexpectedClose() <-chan error {
 	return j.unexpectedClose
-}
-
-func (j *JetStream) NATSReconnects() uint64 {
-	return j.natsReconnects.Load()
 }
 
 func (j *JetStream) Close() {

@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/config"
-	"github.com/ShadyDonkey/portcullis/internal/framepool"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/ShadyDonkey/portcullis/internal/observability"
 	"github.com/ShadyDonkey/portcullis/internal/shard"
 )
@@ -56,6 +56,11 @@ func run() (returnErr error) {
 
 	intents, err := gateway.ParseIntents(cfg.Discord.Intents)
 	if err != nil {
+		return err
+	}
+
+	meter := obs.Meter()
+	if err := metrics.Setup(meter); err != nil {
 		return err
 	}
 
@@ -136,15 +141,18 @@ func run() (returnErr error) {
 		},
 	)
 
-	if err := obs.RegisterMetrics(
-		observability.MetricsSources{
-			PublishStats:      js.PublishStats,
-			ShardStatuses:     shardManager.Statuses,
-			ShardReconnects:   shardManager.Reconnects,
-			NATSReconnects:    js.NATSReconnects,
-			ParseErrors:       shard.ParseErrors,
-			EventTypeOverflow: shard.EventTypeOverflows,
-			OversizedFrames:   framepool.OversizedFrames,
+	if err := metrics.RegisterGauges(
+		meter,
+		metrics.Sources{
+			ShardUp: func() map[int]bool {
+				statuses := shardManager.Statuses()
+				up := make(map[int]bool, len(statuses))
+				for id, status := range statuses {
+					up[id] = status == shard.StatusRunning
+				}
+				return up
+			},
+			InFlightBytes: js.InFlightBytes,
 		},
 	); err != nil {
 		return err
