@@ -10,6 +10,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+const (
+	// per shard session state for proxy use for fresh or resume on restart?
+	shardSessionBucketHistory = 1 // TODO: do I need this defined here?
+	// key for holding info on the global state like intents, number of shards, etc
+	globalStateKey = "global-state"
+)
+
+func shardSessionKey(shardID int) string {
+	return fmt.Sprintf("shard-%d", shardID)
+}
+
 type GlobalState struct {
 	Intents   gateway.Intent `json:"intents"`
 	NumShards int            `json:"num_shards"`
@@ -26,7 +37,6 @@ func (j *JetStream) GetSession(ctx context.Context, shardID int) (*gateway.Sessi
 	}
 
 	var session gateway.Session
-
 	if err = json.Unmarshal(entry.Value(), &session); err != nil {
 		return nil, fmt.Errorf("decode session err, shard %d: %w", shardID, err)
 	}

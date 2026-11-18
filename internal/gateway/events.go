@@ -12,12 +12,10 @@ type RecvReadyData struct {
 
 // TODO: do we need compress and large_threshold here?
 type sendIdentifyData struct {
-	Token          string                 `json:"token"`
-	Properties     sendIdentifyProperties `json:"properties"`
-	Compress       *bool                  `json:"compress,omitempty"`
-	LargeThreshold *int                   `json:"large_threshold,omitempty"`
-	Shard          *[2]int                `json:"shard,omitempty"`
-	Intents        int                    `json:"intents"`
+	Token      string                 `json:"token"`
+	Properties sendIdentifyProperties `json:"properties"`
+	Shard      *[2]int                `json:"shard,omitempty"`
+	Intents    int                    `json:"intents"`
 }
 
 type sendResumeData struct {

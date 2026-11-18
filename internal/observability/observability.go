@@ -6,15 +6,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ShadyDonkey/portcullis/internal/gateway"
-	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/getsentry/sentry-go"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
-	otelmetric "go.opentelemetry.io/otel/metric"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -62,15 +59,13 @@ func Setup(ctx context.Context, base *slog.Logger, cfg Config) (*Observability, 
 			resource.WithAttributes(attribute.String("service.name", "portcullis")),
 			resource.WithFromEnv(),
 		)
-
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
 
-		mExp, mErr := otlpmetrichttp.New(ctx)
-
-		if mErr != nil {
-			return nil, fmt.Errorf("failed to create metric exporter: %w", mErr)
+		mExp, err := otlpmetrichttp.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create metric exporter: %w", err)
 		}
 
 		o.meter = metric.NewMeterProvider(
@@ -78,10 +73,9 @@ func Setup(ctx context.Context, base *slog.Logger, cfg Config) (*Observability, 
 			metric.WithReader(metric.NewPeriodicReader(mExp)),
 		)
 
-		lExp, lErr := otlploghttp.New(ctx)
-
-		if lErr != nil {
-			return nil, fmt.Errorf("failed to create log exporter: %w", lErr)
+		lExp, err := otlploghttp.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create log exporter: %w", err)
 		}
 
 		o.logs = sdklog.NewLoggerProvider(
@@ -131,77 +125,6 @@ func (o *Observability) WrapLogger(l *slog.Logger) *slog.Logger {
 	return slog.New(slog.NewMultiHandler(l.Handler(), otelH))
 }
 
-func (o *Observability) RegisterMetrics(
-	publishStats func() jetstream.PublishStats,
-	shardStatuses func() map[int]gateway.ShardStatus,
-	parseErrors func() uint64,
-	oversizedFrames func() uint64,
-) error {
-	if o.meter == nil {
-		return nil
-	}
-
-	m := o.meter.Meter("github.com/ShadyDonkey/portcullis")
-	drops, _ := m.Int64ObservableCounter("portcullis.publisher.stalled_drops")
-	syncErr, _ := m.Int64ObservableCounter("portcullis.publisher.sync_errors")
-	ackErr, _ := m.Int64ObservableCounter("portcullis.publisher.ack_errors")
-	up, _ := m.Int64ObservableGauge("portcullis.gateway.shard.up")
-	ringEvict, _ := m.Int64ObservableCounter("portcullis.publisher.ring_evictions")
-	byteCapDrops, _ := m.Int64ObservableCounter("portcullis.publisher.byte_cap_drops")
-	oversized, _ := m.Int64ObservableCounter("portcullis.publisher.oversized_frames")
-	parseErr, _ := m.Int64ObservableCounter("portcullis.gateway.parse_errors")
-	overflow, _ := m.Int64ObservableCounter("portcullis.publisher.event_type_overflow_drops")
-	inFlight, _ := m.Int64ObservableGauge("portcullis.publisher.in_flight_bytes")
-	ringOcc, _ := m.Int64ObservableGauge("portcullis.publisher.ring_occupancy")
-
-	_, err := m.RegisterCallback(
-		func(_ context.Context, ob otelmetric.Observer) error {
-			s := publishStats()
-
-			ob.ObserveInt64(drops, int64(s.StalledDrops))
-			ob.ObserveInt64(syncErr, int64(s.SyncErrors))
-			ob.ObserveInt64(ackErr, int64(s.AckErrors))
-			ob.ObserveInt64(ringEvict, int64(s.RingEvictions))
-			ob.ObserveInt64(byteCapDrops, int64(s.ByteCapDrops))
-			ob.ObserveInt64(oversized, int64(oversizedFrames()))
-			ob.ObserveInt64(parseErr, int64(parseErrors()))
-			ob.ObserveInt64(overflow, int64(s.EventTypeOverflowDrops))
-			ob.ObserveInt64(inFlight, int64(s.InFlightBytes))
-			ob.ObserveInt64(ringOcc, int64(s.RingOccupancy))
-
-			for id, status := range shardStatuses() {
-				v := int64(0)
-
-				if status == gateway.ShardStatusRunning {
-					v = 1
-				}
-
-				ob.ObserveInt64(
-					up, v,
-					otelmetric.WithAttributes(
-						attribute.Int("shard_id", id),
-					),
-				)
-			}
-
-			return nil
-		},
-		drops,
-		syncErr,
-		ackErr,
-		up,
-		ringEvict,
-		byteCapDrops,
-		oversized,
-		parseErr,
-		overflow,
-		inFlight,
-		ringOcc,
-	)
-
-	return err
-}
-
 type leveled struct {
 	slog.Handler
 	min slog.Leveler
@@ -209,14 +132,6 @@ type leveled struct {
 
 func (ld leveled) Enabled(ctx context.Context, l slog.Level) bool {
 	return l >= ld.min.Level() && ld.Handler.Enabled(ctx, l)
-}
-
-func (ld leveled) Handle(ctx context.Context, r slog.Record) error {
-	if r.Level < ld.min.Level() {
-		return nil
-	}
-
-	return ld.Handler.Handle(ctx, r)
 }
 
 func (ld leveled) WithAttrs(attrs []slog.Attr) slog.Handler {

@@ -8,22 +8,21 @@ import (
 
 type failureLog struct {
 	mu        sync.Mutex
-	logged    bool
 	lastAt    time.Time
 	sinceLast uint64
 }
 
 func (l *failureLog) record(kind string, err error, kv ...any) {
 	l.mu.Lock()
+	now := time.Now()
 	l.sinceLast++
 	count := l.sinceLast
-	gap := time.Since(l.lastAt)
-	loud := !l.logged || gap >= 2*publishFailureLogInterval
+	gap := now.Sub(l.lastAt)
+	loud := l.lastAt.IsZero() || gap >= 2*publishFailureLogInterval
 	due := loud || gap >= publishFailureLogInterval
 
 	if due {
-		l.logged = true
-		l.lastAt = time.Now()
+		l.lastAt = now
 		l.sinceLast = 0
 	}
 

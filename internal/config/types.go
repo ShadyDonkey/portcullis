@@ -13,9 +13,7 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-const (
-	redacted = "[redacted]"
-)
+const redacted = "[redacted]"
 
 type Duration time.Duration
 
@@ -31,15 +29,6 @@ func (d *Duration) UnmarshalText(text []byte) error {
 
 func (d *Duration) String() string {
 	return time.Duration(*d).String()
-}
-
-func mustParseDuration(s string) Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse duration: %s", s))
-	}
-
-	return Duration(d)
 }
 
 type ByteSize int64
@@ -58,15 +47,6 @@ func (b *ByteSize) String() string {
 	return humanize.Bytes(uint64(*b))
 }
 
-func mustParseByteSize(s string) ByteSize {
-	n, err := humanize.ParseBytes(s)
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse byte size: %s", s))
-	}
-
-	return ByteSize(n)
-}
-
 type EnvVar struct {
 	value   string
 	missing []string
@@ -74,14 +54,12 @@ type EnvVar struct {
 
 func (e *EnvVar) UnmarshalText(text []byte) error {
 	v, missing, err := expand(string(text))
-
 	if err != nil {
 		return err
 	}
 
 	e.value = v
 	e.missing = missing
-
 	return nil
 }
 
@@ -94,21 +72,7 @@ func (e *EnvVar) Missing() []string {
 }
 
 type EnvSecret struct {
-	value   string
-	missing []string
-}
-
-func (e *EnvSecret) UnmarshalText(text []byte) error {
-	v, missing, err := expand(string(text))
-
-	if err != nil {
-		return err
-	}
-
-	e.value = v
-	e.missing = missing
-
-	return nil
+	EnvVar
 }
 
 func (EnvSecret) String() string {
@@ -128,15 +92,11 @@ func (EnvSecret) LogValue() slog.Value {
 }
 
 func (e EnvSecret) Reveal() string {
-	return e.value
-}
-
-func (e *EnvSecret) Missing() []string {
-	return e.missing
+	return e.EnvVar.value
 }
 
 func (e EnvSecret) IsEmpty() bool {
-	return e.value == ""
+	return e.EnvVar.value == ""
 }
 
 var (
@@ -188,7 +148,7 @@ func expand(s string) (out string, missing []string, err error) {
 }
 
 func validEnvName(name string) bool {
-	if len(name) < 1 || name == "" || name == "." || name == ".." || name == "_" || name == "-" || name == "~" {
+	if name == "" || name == "_" {
 		return false
 	}
 

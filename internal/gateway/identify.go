@@ -6,8 +6,6 @@ import (
 )
 
 type identifyBucket struct {
-	// Maybe make a mutex instead?
-	// 	I'm only using chan cause I know I can cancel with ctx
 	sem  chan struct{}
 	last time.Time
 }
@@ -37,8 +35,6 @@ func newIdentifyBucketLimiter(maxConcurrency int) *bucketLimiter {
 }
 
 func (bl *bucketLimiter) Wait(ctx context.Context, shardID int) error {
-	// is this the best way?
-	// 	since it's based on max concurrency it shouldn't be a problematic
 	b := bl.buckets[shardID%len(bl.buckets)]
 
 	select {

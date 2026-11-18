@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,7 +14,6 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/ShadyDonkey/portcullis/internal/observability"
-	"github.com/carlmjohnson/requests"
 )
 
 func main() {
@@ -27,9 +24,9 @@ func main() {
 }
 
 func run() (returnErr error) {
-	cfg, cfgErr := config.Load()
-	if cfgErr != nil {
-		return cfgErr
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 
 	logger := newLogger(cfg.Log)
@@ -38,16 +35,15 @@ func run() (returnErr error) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	obs, obsErr := observability.Setup(
+	obs, err := observability.Setup(
 		ctx, logger, observability.Config{
 			OtelEnabled:   cfg.Observability.OtelEnabled,
 			SentryEnabled: cfg.Observability.SentryEnabled,
 			LogLevel:      cfg.Log.Level,
 		},
 	)
-
-	if obsErr != nil {
-		return obsErr
+	if err != nil {
+		return err
 	}
 
 	defer func() {
@@ -57,13 +53,12 @@ func run() (returnErr error) {
 	logger = obs.WrapLogger(logger)
 	slog.SetDefault(logger)
 
-	intents, intentsParseErr := gateway.ParseIntents(cfg.Discord.Intents)
-
-	if intentsParseErr != nil {
-		return intentsParseErr
+	intents, err := gateway.ParseIntents(cfg.Discord.Intents)
+	if err != nil {
+		return err
 	}
 
-	js, jsErr := jetstream.New(
+	js, err := jetstream.New(
 		ctx, jetstream.Config{
 			URL:            cfg.NATS.URL.String(),
 			User:           cfg.NATS.Username.String(),
@@ -76,128 +71,96 @@ func run() (returnErr error) {
 			MaxBytes:       int64(cfg.NATS.Stream.MaxBytes),
 		},
 	)
-
-	if jsErr != nil {
-		return jsErr
+	if err != nil {
+		return err
 	}
 	defer js.Close()
 
-	httpClient := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: Transport{
-			RoundTripper: http.DefaultTransport,
-			Headers: http.Header{
-				"Authorization": {fmt.Sprintf("Bot %s", cfg.Discord.Token.Reveal())},
-				// TODO: replace with real build version
-				"User-Agent": {fmt.Sprintf("DiscordBot (https://portcullisgw.com, %s)", "0.0.0")},
-			},
-		},
+	httpClient := newDiscordClient(cfg.Discord.Token.Reveal())
+
+	info, err := fetchGatewayBot(ctx, httpClient)
+	if err != nil {
+		return err
 	}
 
-	var resp struct {
-		URL               string            `json:"url"`
-		Shards            int               `json:"shards"`
-		SessionStartLimit sessionStartLimit `json:"session_start_limit"`
-	}
+	slog.DebugContext(ctx, "Fetched gateway info", "resp", info)
 
-	// TODO: Add config do the base URL (ref: nirn)
-	reqErr := requests.
-		URL("https://discord.com/api/v10/gateway/bot").
-		Client(httpClient).
-		ToJSON(&resp).
-		Fetch(ctx)
-
-	if reqErr != nil {
-		return reqErr
-	}
-
-	slog.DebugContext(ctx, "Fetched gateway info", "resp", resp)
-
-	numShards := resp.Shards
-	var reshardInterval time.Duration
-
-	if o := cfg.Discord.Sharding.ShardCountOverride; o != nil {
-		if *o < resp.Shards {
-			slog.WarnContext(
-				ctx, "shard_count_override is below Discord's recommendation", "override", *o, "recommended",
-				resp.Shards,
-			)
-		}
-
-		numShards = *o
-	} else {
-		reshardInterval = time.Duration(*cfg.Discord.Sharding.ReshardCheckInterval)
-	}
+	numShards, reshardInterval := resolveSharding(ctx, cfg.Discord.Sharding, info.Shards)
 
 	slog.DebugContext(
 		ctx,
 		"identify budget",
-		"remaining", resp.SessionStartLimit.Remaining,
-		"total", resp.SessionStartLimit.Total,
-		"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
+		"remaining", info.SessionStartLimit.Remaining,
+		"total", info.SessionStartLimit.Total,
+		"reset_after", time.Duration(info.SessionStartLimit.ResetAfter)*time.Millisecond,
 		"num_shards", numShards,
-		"max_concurrency", resp.SessionStartLimit.MaxConcurrency,
+		"max_concurrency", info.SessionStartLimit.MaxConcurrency,
 	)
 
-	if budgetErr := checkIdentifyBudget(resp.SessionStartLimit, numShards); budgetErr != nil {
+	if err := checkIdentifyBudget(info.SessionStartLimit, numShards); err != nil {
 		slog.ErrorContext(
 			ctx,
 			"refusing to start, identify budget too low",
-			"remaining", resp.SessionStartLimit.Remaining,
-			"total", resp.SessionStartLimit.Total,
+			"remaining", info.SessionStartLimit.Remaining,
+			"total", info.SessionStartLimit.Total,
 			"needed", numShards+identifyBudgetMargin,
-			"reset_after", time.Duration(resp.SessionStartLimit.ResetAfter)*time.Millisecond,
+			"reset_after", time.Duration(info.SessionStartLimit.ResetAfter)*time.Millisecond,
 			"fatal", true,
-			"err", budgetErr,
+			"err", err,
 		)
 
-		return budgetErr
+		return err
 	}
 
 	slog.DebugContext(
-		ctx, "Starting shard manager", "url", resp.URL, "intents", intents, "num_shards", numShards,
+		ctx, "Starting shard manager", "url", info.URL, "intents", intents, "num_shards", numShards,
 	)
 
-	if stateErr := reconcileProxyState(ctx, js, int(intents), numShards); stateErr != nil {
-		slog.ErrorContext(ctx, "failed to reconcile proxy state", "err", stateErr)
-
-		return stateErr
+	if err := reconcileProxyState(ctx, js, intents, numShards); err != nil {
+		slog.ErrorContext(ctx, "failed to reconcile proxy state", "err", err)
+		return err
 	}
 
 	shardManager := gateway.NewShardManager(
 		gateway.ShardManagerConfig{
-			URL:             resp.URL,
+			URL:             info.URL,
 			Token:           cfg.Discord.Token.Reveal(),
 			Intents:         int(intents),
 			NumShards:       numShards,
 			Publisher:       js,
 			SessionStore:    js,
-			MaxConcurrency:  resp.SessionStartLimit.MaxConcurrency,
+			MaxConcurrency:  info.SessionStartLimit.MaxConcurrency,
 			ReshardInterval: reshardInterval,
 			Filter:          gateway.NewEventFilter(cfg.Portcullis.Publish),
 		},
 	)
 
-	if regErr := obs.RegisterMetrics(
-		js.PublishStats, shardManager.Statuses, gateway.ParseErrors, framepool.OversizedFrames,
-	); regErr != nil {
-		return regErr
+	if err := obs.RegisterMetrics(
+		observability.MetricsSources{
+			PublishStats:      js.PublishStats,
+			ShardStatuses:     shardManager.Statuses,
+			ParseErrors:       gateway.ParseErrors,
+			EventTypeOverflow: gateway.EventTypeOverflows,
+			OversizedFrames:   framepool.OversizedFrames,
+		},
+	); err != nil {
+		return err
 	}
 
-	if startErr := shardManager.Start(ctx); startErr != nil {
-		slog.ErrorContext(ctx, "failed to start shard manager", "err", startErr)
-		return startErr
+	if err := shardManager.Start(ctx); err != nil {
+		slog.ErrorContext(ctx, "failed to start shard manager", "err", err)
+		return err
 	}
 
 	fatal := make(chan error, 1)
 	for id := range numShards {
 		go func() {
-			if wErr := shardManager.WaitForShard(id); wErr != nil {
+			if err := shardManager.WaitForShard(id); err != nil {
 				select {
-				case fatal <- fmt.Errorf("shard %d failed: %w", id, wErr):
+				case fatal <- fmt.Errorf("shard %d failed: %w", id, err):
 				default:
 					slog.WarnContext(
-						ctx, fmt.Sprintf("additional shard failure on %d", id), "shard_id", id, "err", wErr,
+						ctx, fmt.Sprintf("additional shard failure on %d", id), "shard_id", id, "err", err,
 					)
 				}
 			}
@@ -215,6 +178,7 @@ func run() (returnErr error) {
 
 	case runErr = <-fatal:
 		slog.ErrorContext(ctx, "fatal shard error, shutting down", "err", runErr)
+
 	case runErr = <-js.UnexpectedClose():
 		slog.ErrorContext(ctx, "NATS connection closed, shutting down", "err", runErr)
 	}
@@ -235,77 +199,4 @@ func newLogger(c config.LogConfig) *slog.Logger {
 	}
 
 	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
-}
-
-type sessionStartLimit struct {
-	Total          int `json:"total"`
-	Remaining      int `json:"remaining"`
-	ResetAfter     int `json:"reset_after"`
-	MaxConcurrency int `json:"max_concurrency"`
-}
-
-func reconcileProxyState(ctx context.Context, js *jetstream.JetStream, intents, numShards int) error {
-	want := jetstream.GlobalState{
-		Intents:   gateway.Intent(intents),
-		NumShards: numShards,
-	}
-
-	stored, err := js.GetGlobalState(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get global state: %w", err)
-	}
-
-	if stored != nil && *stored == want {
-		slog.InfoContext(ctx, "global state unchanged, all sessions eligible to resume")
-		return nil
-	}
-
-	clearUpTo := want.NumShards
-	if stored != nil {
-		clearUpTo = max(clearUpTo, stored.NumShards)
-		slog.WarnContext(
-			ctx, "global state changed, clearing all sessions",
-			"old_intents", stored.Intents, "new_intents", want.Intents,
-			"old_num_shards", stored.NumShards, "new_num_shards", want.NumShards,
-		)
-	} else {
-		slog.InfoContext(ctx, "no stored global state, clearing all sessions")
-	}
-
-	for id := range clearUpTo {
-		if err := js.DeleteSession(ctx, id); err != nil {
-			return err
-		}
-	}
-
-	if gsErr := js.PutGlobalState(ctx, want); gsErr != nil {
-		return fmt.Errorf("failed to put global state: %w", gsErr)
-	}
-
-	return nil
-}
-
-type Transport struct {
-	http.RoundTripper
-	Headers http.Header
-}
-
-func (t Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	maps.Copy(req.Header, t.Headers)
-	return t.RoundTripper.RoundTrip(req)
-}
-
-// identifyBudgetMargin is headroom for reconnect re-identifies: the guard
-// requires enough budget for every shard to identify plus this many
-// emergency re-identifies after reconnects.
-const identifyBudgetMargin = 10
-
-func checkIdentifyBudget(limit sessionStartLimit, numShards int) error {
-	needed := numShards + identifyBudgetMargin
-	if limit.Remaining < needed {
-		return fmt.Errorf("identify budget nearly exhausted, not starting")
-	}
-
-	return nil
 }

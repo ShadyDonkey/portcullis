@@ -4,10 +4,6 @@ import (
 	"log/slog"
 )
 
-const (
-	defaultConfigPath = "config.toml"
-)
-
 type Config struct {
 	Discord       DiscordConfig       `toml:"discord"`
 	Portcullis    PortcullisConfig    `toml:"portcullis"`

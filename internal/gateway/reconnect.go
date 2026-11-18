@@ -28,8 +28,7 @@ func (a exitAction) String() string {
 }
 
 func errorToExitAction(err error) exitAction {
-	var closeErr *CloseError
-	if errors.As(err, &closeErr) {
+	if closeErr, ok := errors.AsType[*CloseError](err); ok {
 		switch {
 		case isFatalCloseCode(closeErr.Code):
 			return exitStop
@@ -40,8 +39,7 @@ func errorToExitAction(err error) exitAction {
 		}
 	}
 
-	var invalid *InvalidSessionError
-	if errors.As(err, &invalid) {
+	if invalid, ok := errors.AsType[*InvalidSessionError](err); ok {
 		if invalid.Resumable {
 			return exitResume
 		}

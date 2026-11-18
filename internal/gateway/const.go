@@ -4,7 +4,6 @@ import (
 	"time"
 )
 
-// TODO: Clean up these unused consts?
 const (
 	Version          = 10
 	DefaultEncoding  = "json"
@@ -29,6 +28,6 @@ const (
 	// Max retries on websocket connections to force stopping when Discord GW is down
 	// or some other network failure.
 	maxDialRetries = 30
-
+	
 	EventTypeMaxLength = 40
 )
