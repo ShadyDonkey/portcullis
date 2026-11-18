@@ -5,5 +5,5 @@ import (
 )
 
 type EventPublisher interface {
-	Publish(ctx context.Context, eventType string, payload []byte) error
+	Publish(ctx context.Context, eventType [EventTypeMaxLength]byte, eventTypeLen int, frame []byte) error
 }

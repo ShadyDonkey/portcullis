@@ -134,6 +134,8 @@ func (o *Observability) WrapLogger(l *slog.Logger) *slog.Logger {
 func (o *Observability) RegisterMetrics(
 	publishStats func() jetstream.PublishStats,
 	shardStatuses func() map[int]gateway.ShardStatus,
+	parseErrors func() uint64,
+	oversizedFrames func() uint64,
 ) error {
 	if o.meter == nil {
 		return nil
@@ -144,6 +146,13 @@ func (o *Observability) RegisterMetrics(
 	syncErr, _ := m.Int64ObservableCounter("portcullis.publisher.sync_errors")
 	ackErr, _ := m.Int64ObservableCounter("portcullis.publisher.ack_errors")
 	up, _ := m.Int64ObservableGauge("portcullis.gateway.shard.up")
+	ringEvict, _ := m.Int64ObservableCounter("portcullis.publisher.ring_evictions")
+	byteCapDrops, _ := m.Int64ObservableCounter("portcullis.publisher.byte_cap_drops")
+	oversized, _ := m.Int64ObservableCounter("portcullis.publisher.oversized_frames")
+	parseErr, _ := m.Int64ObservableCounter("portcullis.gateway.parse_errors")
+	overflow, _ := m.Int64ObservableCounter("portcullis.publisher.event_type_overflow_drops")
+	inFlight, _ := m.Int64ObservableGauge("portcullis.publisher.in_flight_bytes")
+	ringOcc, _ := m.Int64ObservableGauge("portcullis.publisher.ring_occupancy")
 
 	_, err := m.RegisterCallback(
 		func(_ context.Context, ob otelmetric.Observer) error {
@@ -152,6 +161,13 @@ func (o *Observability) RegisterMetrics(
 			ob.ObserveInt64(drops, int64(s.StalledDrops))
 			ob.ObserveInt64(syncErr, int64(s.SyncErrors))
 			ob.ObserveInt64(ackErr, int64(s.AckErrors))
+			ob.ObserveInt64(ringEvict, int64(s.RingEvictions))
+			ob.ObserveInt64(byteCapDrops, int64(s.ByteCapDrops))
+			ob.ObserveInt64(oversized, int64(oversizedFrames()))
+			ob.ObserveInt64(parseErr, int64(parseErrors()))
+			ob.ObserveInt64(overflow, int64(s.EventTypeOverflowDrops))
+			ob.ObserveInt64(inFlight, int64(s.InFlightBytes))
+			ob.ObserveInt64(ringOcc, int64(s.RingOccupancy))
 
 			for id, status := range shardStatuses() {
 				v := int64(0)
@@ -174,6 +190,13 @@ func (o *Observability) RegisterMetrics(
 		syncErr,
 		ackErr,
 		up,
+		ringEvict,
+		byteCapDrops,
+		oversized,
+		parseErr,
+		overflow,
+		inFlight,
+		ringOcc,
 	)
 
 	return err

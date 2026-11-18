@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/config"
+	"github.com/ShadyDonkey/portcullis/internal/framepool"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/ShadyDonkey/portcullis/internal/observability"
@@ -177,7 +178,9 @@ func run() (returnErr error) {
 		},
 	)
 
-	if regErr := obs.RegisterMetrics(js.PublishStats, shardManager.Statuses); regErr != nil {
+	if regErr := obs.RegisterMetrics(
+		js.PublishStats, shardManager.Statuses, gateway.ParseErrors, framepool.OversizedFrames,
+	); regErr != nil {
 		return regErr
 	}
 

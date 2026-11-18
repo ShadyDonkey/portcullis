@@ -11,6 +11,7 @@ const (
 	writeTimeout     = 5 * time.Second
 	helloTimeout     = 10 * time.Second
 	identifyInterval = 5*time.Second + 500*time.Millisecond
+	controlChanSize  = 16
 
 	// TODO: make everything below this configurable with default fallbacks
 	reconnectMinDelay       = 1 * time.Second
@@ -28,4 +29,6 @@ const (
 	// Max retries on websocket connections to force stopping when Discord GW is down
 	// or some other network failure.
 	maxDialRetries = 30
+
+	EventTypeMaxLength = 40
 )

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ShadyDonkey/portcullis/internal/framepool"
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -24,6 +27,9 @@ const (
 	publishStallWait          = 1 * time.Millisecond
 	publishFailureLogInterval = 10 * time.Second
 	publishMaxPending         = 4096
+	inFlightByteCap           = 128 << 20
+	pendingCap                = publishMaxPending + 1
+	reaperTick                = 1 * time.Millisecond
 )
 
 type Config struct {
@@ -40,6 +46,18 @@ type Config struct {
 	Password string
 }
 
+type ringSlot struct {
+	eventType    [gateway.EventTypeMaxLength]byte
+	eventTypeLen int
+	frame        []byte
+}
+
+type pendingSlot struct {
+	ok    <-chan *jetstream.PubAck
+	err   <-chan error
+	frame []byte
+}
+
 type JetStream struct {
 	nc              *nats.Conn
 	js              jetstream.JetStream
@@ -53,6 +71,31 @@ type JetStream struct {
 	stallFailures   failureLog
 	syncFailures    failureLog
 	ackFailures     failureLog
+
+	pubMu         sync.Mutex
+	ring          [publishMaxPending]ringSlot
+	ringHead      int
+	ringLen       int
+	ringSignal    chan struct{}
+	ringOccupancy atomic.Int64
+
+	pendMu     sync.Mutex
+	pending    [pendingCap]pendingSlot
+	pendHead   int
+	pendLen    int
+	pendSignal chan struct{}
+
+	inFlightBytes atomic.Int64
+
+	stopCh       chan struct{}
+	drainStopped chan struct{}
+	drainDone    chan struct{}
+	reaperDone   chan struct{}
+
+	ringEvictions          atomic.Uint64
+	byteCapDrops           atomic.Uint64
+	eventTypeOverflowDrops atomic.Uint64
+	dropFailures           failureLog
 }
 
 func New(ctx context.Context, config Config) (*JetStream, error) {
@@ -67,6 +110,12 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 	j := &JetStream{
 		subjectPrefix:   config.SubjectPrefix,
 		unexpectedClose: make(chan error, 1),
+		ringSignal:      make(chan struct{}, 1),
+		pendSignal:      make(chan struct{}, 1),
+		stopCh:          make(chan struct{}),
+		drainStopped:    make(chan struct{}),
+		drainDone:       make(chan struct{}),
+		reaperDone:      make(chan struct{}),
 	}
 
 	nc, err := nats.Connect(
@@ -178,6 +227,9 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 	j.kv = kv
 	j.js = js
 
+	go j.publishDrain()
+	go j.publishReaper()
+
 	return j, nil
 }
 
@@ -185,62 +237,406 @@ func (j *JetStream) UnexpectedClose() <-chan error {
 	return j.unexpectedClose
 }
 
-func (j *JetStream) Publish(ctx context.Context, eventType string, payload []byte) error {
-	if eventType == "" {
-		err := fmt.Errorf("publish: event type is empty")
-		j.syncErrors.Add(1)
-		j.syncFailures.record("sync_publish", err)
+func (j *JetStream) buildSubject(eventType []byte) string {
+	return fmt.Sprintf("%s.%s", j.subjectPrefix, eventType)
+}
+
+func (j *JetStream) Publish(
+	ctx context.Context, eventType [gateway.EventTypeMaxLength]byte, eventTypeLen int, frame []byte,
+) error {
+	if eventTypeLen == 0 || eventTypeLen > len(eventType) {
+		j.eventTypeOverflowDrops.Add(1)
+		err := fmt.Errorf("publish: event type length %d out of range", eventTypeLen)
+		// TODO: maybe add these strings to a const list
+		j.dropFailures.record("event_type_overflow", err)
+		j.releaseFrame(frame, true)
 
 		return err
 	}
 
-	if j.js.PublishAsyncPending() >= publishMaxPending {
-		j.stalledDrops.Add(1)
-		j.stallFailures.record("stalled_drop", jetstream.ErrTooManyStalledMsgs)
+	size := int64(len(frame))
+	var logKind string
+	var logErr error
+	var byteCapEvicted bool
 
-		return fmt.Errorf("publish: %w", jetstream.ErrTooManyStalledMsgs)
+	j.pubMu.Lock()
+
+	if j.isStopping() {
+		j.pubMu.Unlock()
+		j.dropFailures.record("publish_after_close", errors.New("publisher is closed"))
+		j.releaseFrame(frame, true)
+
+		return errors.New("publish: publisher is closed")
 	}
 
-	subject := fmt.Sprintf("%s.%s", j.subjectPrefix, eventType)
+	for j.inFlightBytes.Load()+size > inFlightByteCap {
+		if j.ringLen == 0 {
+			j.byteCapDrops.Add(1)
+			j.pubMu.Unlock()
+			j.dropFailures.record("byte_cap_drop", jetstream.ErrTooManyStalledMsgs)
+			j.releaseFrame(frame, true)
+			return fmt.Errorf("publish: %w", jetstream.ErrTooManyStalledMsgs)
+		}
 
-	if _, err := j.js.PublishAsync(subject, payload, jetstream.WithStallWait(publishStallWait)); err != nil {
+		j.evictOldestLocked(true)
+		byteCapEvicted = true
+	}
+
+	if j.ringLen == len(j.ring) {
+		j.evictOldestLocked(false)
+		logKind = "ring_eviction"
+		logErr = jetstream.ErrTooManyStalledMsgs
+	}
+
+	slot := &j.ring[(j.ringHead+j.ringLen)%len(j.ring)]
+	slot.eventType = eventType
+	slot.eventTypeLen = eventTypeLen
+	slot.frame = frame
+
+	j.ringLen++
+	j.ringOccupancy.Store(int64(j.ringLen))
+	j.inFlightBytes.Add(size)
+	j.pubMu.Unlock()
+
+	if logKind != "" {
+		j.dropFailures.record(logKind, logErr)
+	}
+
+	if byteCapEvicted {
+		j.dropFailures.record("byte_cap_eviction", jetstream.ErrTooManyStalledMsgs)
+	}
+
+	signal(j.ringSignal)
+
+	return nil
+}
+
+func (j *JetStream) evictOldestLocked(byteCap bool) {
+	slot := &j.ring[j.ringHead]
+	frame := slot.frame
+	*slot = ringSlot{}
+	j.ringHead = (j.ringHead + 1) % len(j.ring)
+	j.ringLen--
+	j.ringOccupancy.Store(int64(j.ringLen))
+	j.ringEvictions.Add(1)
+
+	if byteCap {
+		j.byteCapDrops.Add(1)
+	}
+
+	j.releaseFrame(frame, true)
+}
+
+func (j *JetStream) releaseFrame(frame []byte, pool bool) {
+	if len(frame) == 0 {
+		return
+	}
+
+	if pool {
+		framepool.Put(frame)
+	}
+
+	j.inFlightBytes.Add(-int64(len(frame)))
+}
+
+func (j *JetStream) tryPopRing() (ringSlot, bool) {
+	j.pubMu.Lock()
+	defer j.pubMu.Unlock()
+
+	if j.ringLen == 0 {
+		return ringSlot{}, false
+	}
+
+	slot := j.ring[j.ringHead]
+	j.ring[j.ringHead] = ringSlot{}
+	j.ringHead = (j.ringHead + 1) % len(j.ring)
+	j.ringLen--
+	j.ringOccupancy.Store(int64(j.ringLen))
+
+	return slot, true
+}
+
+func (j *JetStream) popRing() (ringSlot, bool) {
+	for {
+		if slot, ok := j.tryPopRing(); ok {
+			return slot, true
+		}
+
+		select {
+		case <-j.ringSignal:
+		case <-j.stopCh:
+			return ringSlot{}, false
+		}
+	}
+}
+
+func (j *JetStream) hasSubmitRoom() bool {
+	j.pendMu.Lock()
+	room := j.pendLen < len(j.pending)
+	j.pendMu.Unlock()
+
+	return room && j.js.PublishAsyncPending() < publishMaxPending
+}
+
+func (j *JetStream) submit(slot ringSlot) {
+	if j.noMoreSubmits() {
+		j.dropSlot(slot, "shutdown_drop")
+		return
+	}
+
+	subject := j.buildSubject(slot.eventType[:slot.eventTypeLen])
+	future, err := j.js.PublishAsync(subject, slot.frame, jetstream.WithStallWait(publishStallWait))
+
+	if err != nil {
 		if errors.Is(err, jetstream.ErrTooManyStalledMsgs) {
 			j.stalledDrops.Add(1)
 			j.stallFailures.record("stalled_drop", err)
 		} else {
 			j.syncErrors.Add(1)
-			j.syncFailures.record("sync_publish", err)
+			j.syncFailures.record("sync_publish", err, "subject", subject)
 		}
 
-		return fmt.Errorf("publish: %w", err)
+		j.releaseFrame(slot.frame, true)
+		return
 	}
 
-	return nil
+	j.pushPending(future.Ok(), future.Err(), slot.frame)
+}
+
+func (j *JetStream) pushPending(ok <-chan *jetstream.PubAck, err <-chan error, frame []byte) {
+	j.pendMu.Lock()
+
+	if j.pendLen == len(j.pending) {
+		j.pendMu.Unlock()
+		j.releaseFrame(frame, false)
+		slog.Error("pending registry full, dropped publish", "pending", pendingCap)
+		return
+	}
+
+	slot := &j.pending[(j.pendHead+j.pendLen)%len(j.pending)]
+	slot.ok = ok
+	slot.err = err
+	slot.frame = frame
+
+	j.pendLen++
+	j.pendMu.Unlock()
+	signal(j.pendSignal)
+}
+
+func (j *JetStream) dropSlot(slot ringSlot, kind string) {
+	j.dropFailures.record(kind, errors.New("publish dropped at shutdown"))
+	j.releaseFrame(slot.frame, true)
+}
+
+func (j *JetStream) publishDrain() {
+	ticker := time.NewTicker(publishStallWait)
+	defer ticker.Stop()
+	defer close(j.drainDone)
+
+	for {
+		slot, ok := j.popRing()
+
+		if !ok {
+			return
+		}
+
+		for !j.hasSubmitRoom() {
+			select {
+			case <-j.pendSignal:
+			case <-ticker.C:
+			case <-j.stopCh:
+				j.submit(slot)
+				j.drainRemaining()
+				return
+			}
+		}
+
+		j.submit(slot)
+	}
+}
+
+func (j *JetStream) drainRemaining() {
+	for {
+		slot, ok := j.tryPopRing()
+
+		if !ok {
+			return
+		}
+
+		if !j.hasSubmitRoom() {
+			j.dropSlot(slot, "shutdown_drop")
+			continue
+		}
+
+		j.submit(slot)
+	}
+}
+
+func futureResolved(ok <-chan *jetstream.PubAck, err <-chan error) bool {
+	select {
+	case <-ok:
+		return true
+	case <-err:
+		return true
+	default:
+		return false
+	}
+}
+
+func (j *JetStream) publishReaper() {
+	ticker := time.NewTicker(reaperTick)
+	defer ticker.Stop()
+	defer close(j.reaperDone)
+
+	drainFinished := false
+
+	for {
+		j.pendMu.Lock()
+
+		for j.pendLen > 0 {
+			head := &j.pending[j.pendHead]
+			if !futureResolved(head.ok, head.err) {
+				break
+			}
+
+			frame := head.frame
+			*head = pendingSlot{}
+			j.pendHead = (j.pendHead + 1) % len(j.pending)
+			j.pendLen--
+			j.pendMu.Unlock()
+			j.releaseFrame(frame, true)
+			signal(j.pendSignal)
+			j.pendMu.Lock()
+		}
+
+		empty := j.pendLen == 0
+		j.pendMu.Unlock()
+
+		if j.isStopping() {
+			if !drainFinished {
+				select {
+				case <-j.drainStopped:
+					drainFinished = true
+				case <-ticker.C:
+				}
+			} else {
+				<-ticker.C
+			}
+
+			if drainFinished && empty {
+				return
+			}
+
+			continue
+		}
+
+		<-ticker.C
+	}
+
+}
+
+func (j *JetStream) forceReleaseAll() {
+	j.pendMu.Lock()
+	n := j.pendLen
+
+	for i := 0; i < n; i++ {
+		slot := &j.pending[j.pendHead]
+		frame := slot.frame
+		*slot = pendingSlot{}
+		j.pendHead = (j.pendHead + 1) % len(j.pending)
+		j.pendLen--
+		j.pendMu.Unlock()
+		j.releaseFrame(frame, false)
+		j.pendMu.Lock()
+	}
+
+	j.pendMu.Unlock()
+	slog.Error("forced release of pending publishes at shutdown", "dropped", n)
+}
+
+func (j *JetStream) isStopping() bool {
+	select {
+	case <-j.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
+func (j *JetStream) noMoreSubmits() bool {
+	select {
+	case <-j.drainStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+func signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
 }
 
 type PublishStats struct {
-	StalledDrops uint64
-	SyncErrors   uint64
-	AckErrors    uint64
+	StalledDrops           uint64
+	SyncErrors             uint64
+	AckErrors              uint64
+	RingEvictions          uint64
+	ByteCapDrops           uint64
+	EventTypeOverflowDrops uint64
+	InFlightBytes          uint64
+	RingOccupancy          uint64
 }
 
 func (j *JetStream) PublishStats() PublishStats {
 	return PublishStats{
-		StalledDrops: j.stalledDrops.Load(),
-		SyncErrors:   j.syncErrors.Load(),
-		AckErrors:    j.ackErrors.Load(),
+		StalledDrops:           j.stalledDrops.Load(),
+		SyncErrors:             j.syncErrors.Load(),
+		AckErrors:              j.ackErrors.Load(),
+		RingEvictions:          j.ringEvictions.Load(),
+		ByteCapDrops:           j.byteCapDrops.Load(),
+		EventTypeOverflowDrops: j.eventTypeOverflowDrops.Load(),
+		InFlightBytes:          uint64(j.inFlightBytes.Load()),
+		RingOccupancy:          uint64(j.ringOccupancy.Load()),
 	}
 }
 
 func (j *JetStream) Close() {
-	j.closing.Store(true)
+	if j.closing.Swap(true) {
+		return
+	}
+
+	close(j.stopCh)
 
 	select {
-	case <-j.js.PublishAsyncComplete():
+	case <-j.drainDone:
+	case <-time.After(publishCompleteWait):
+		slog.Error("timed out draining publish ring", "ring", j.ringOccupancy.Load())
+	}
+
+	close(j.drainStopped)
+
+	select {
+	case <-j.reaperDone:
 	case <-time.After(publishCompleteWait):
 		slog.Error(
 			"timed out waiting for pending publishes to complete, forcing drain", "pending", j.js.PublishAsyncPending(),
 		)
+		j.forceReleaseAll()
+
+		select {
+		case <-j.reaperDone:
+		case <-time.After(time.Second):
+			slog.Error("reaper did not exit after forced release")
+		}
+	}
+
+	select {
+	case <-j.js.PublishAsyncComplete():
+	default:
+		slog.Error("pending publishes still unresolved at shutdown", "pending", j.js.PublishAsyncPending())
 	}
 
 	if j.nc.Status() == nats.CLOSED {
