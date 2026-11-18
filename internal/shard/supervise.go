@@ -1,4 +1,4 @@
-package gateway
+package shard
 
 import (
 	"context"
@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
 )
 
-func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) {
+func (m *Manager) supervise(ctx context.Context, id int, ms *managedShard) {
 	var bo backoff
 	var err error
 	var consecutiveUnstable int
@@ -26,19 +28,20 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 			break
 		}
 
-		action := errorToExitAction(err)
-		if action == exitStop {
-			if closeErr, ok := errors.AsType[*CloseError](err); ok {
+		action := gateway.ErrorToExitAction(err)
+		if action == gateway.ExitStop {
+			if closeErr, ok := errors.AsType[*gateway.CloseError](err); ok {
 				slog.ErrorContext(
 					ctx, "shard exiting permanently",
-					"shard_id", id, "code", closeErr.Code, "hint", closeCodeHint(closeErr.Code), "fatal", true,
+					"shard_id", id, "code", closeErr.Code, "hint", gateway.CloseCodeHint(closeErr.Code), "fatal",
+					true,
 				)
 			}
 			err = fmt.Errorf("exit stop code received, not reconnecting: %w", err)
 			break
 		}
 
-		forceFresh := action == exitReidentify
+		forceFresh := action == gateway.ExitReidentify
 		if forceFresh {
 			m.discardSession(ctx, id)
 		}
@@ -89,8 +92,8 @@ func (m *ShardManager) supervise(ctx context.Context, id int, ms *managedShard) 
 	}
 }
 
-func (m *ShardManager) reconnect(
-	ctx context.Context, id int, bo *backoff, action exitAction, forceFresh bool, cause error,
+func (m *Manager) reconnect(
+	ctx context.Context, id int, bo *backoff, action gateway.ExitAction, forceFresh bool, cause error,
 ) (
 	*Shard, error,
 ) {
@@ -99,8 +102,8 @@ func (m *ShardManager) reconnect(
 		attempts++
 		delay := bo.next()
 
-		if action == exitReidentify {
-			delay = max(delay, reidentifyDelay())
+		if action == gateway.ExitReidentify {
+			delay = max(delay, gateway.ReidentifyDelay())
 		}
 
 		slog.WarnContext(
@@ -146,7 +149,7 @@ func waitDelay(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (m *ShardManager) discardSession(ctx context.Context, id int) error {
+func (m *Manager) discardSession(ctx context.Context, id int) error {
 	deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
 	defer cancel()
 
@@ -158,7 +161,7 @@ func (m *ShardManager) discardSession(ctx context.Context, id int) error {
 	return nil
 }
 
-func (m *ShardManager) idToShardConfig(id int) ShardConfig {
+func (m *Manager) idToShardConfig(id int) ShardConfig {
 	return ShardConfig{
 		ID:              id,
 		URL:             m.config.URL,

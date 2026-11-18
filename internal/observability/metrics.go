@@ -4,15 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
+	"github.com/ShadyDonkey/portcullis/internal/shard"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 )
 
 type MetricsSources struct {
 	PublishStats      func() jetstream.PublishStats
-	ShardStatuses     func() map[int]gateway.ShardStatus
+	ShardStatuses     func() map[int]shard.Status
 	ParseErrors       func() uint64
 	EventTypeOverflow func() uint64
 	OversizedFrames   func() uint64
@@ -40,9 +40,9 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 		return fmt.Errorf("create ack_errors metric: %w", err)
 	}
 
-	up, err := m.Int64ObservableGauge("portcullis.gateway.shard.up")
+	up, err := m.Int64ObservableGauge("portcullis.shard.up")
 	if err != nil {
-		return fmt.Errorf("create shard_up metric: %w", err)
+		return fmt.Errorf("create shard.up metric: %w", err)
 	}
 
 	ringEvictions, err := m.Int64ObservableCounter("portcullis.publisher.ring_evictions")
@@ -60,12 +60,12 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 		return fmt.Errorf("create oversized_frames metric: %w", err)
 	}
 
-	parseErrors, err := m.Int64ObservableCounter("portcullis.gateway.parse_errors")
+	parseErrors, err := m.Int64ObservableCounter("portcullis.shard.parse_errors")
 	if err != nil {
 		return fmt.Errorf("create parse_errors metric: %w", err)
 	}
 
-	overflow, err := m.Int64ObservableCounter("portcullis.publisher.event_type_overflow_drops")
+	overflow, err := m.Int64ObservableCounter("portcullis.shard.event_type_overflow_drops")
 	if err != nil {
 		return fmt.Errorf("create event_type_overflow_drops metric: %w", err)
 	}
@@ -97,7 +97,7 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 
 			for id, status := range sources.ShardStatuses() {
 				v := int64(0)
-				if status == gateway.ShardStatusRunning {
+				if status == shard.StatusRunning {
 					v = 1
 				}
 

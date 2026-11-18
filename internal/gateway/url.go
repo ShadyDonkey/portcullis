@@ -6,9 +6,8 @@ import (
 	"strconv"
 )
 
-func withGatewayParams(raw string) (string, error) {
+func BuildURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
-
 	if err != nil {
 		return "", fmt.Errorf("failed to parse gateway url: %w", err)
 	}
@@ -24,6 +23,5 @@ func withGatewayParams(raw string) (string, error) {
 	}
 
 	u.RawQuery = q.Encode()
-
 	return u.String(), nil
 }

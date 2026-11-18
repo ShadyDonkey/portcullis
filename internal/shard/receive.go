@@ -1,4 +1,4 @@
-package gateway
+package shard
 
 import (
 	"bytes"
@@ -6,20 +6,16 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	"fmt"
-	"io"
 	"log/slog"
-	"sync/atomic"
 
 	"github.com/ShadyDonkey/portcullis/internal/framepool"
-	"github.com/coder/websocket"
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
+	"github.com/ShadyDonkey/portcullis/internal/ws"
 )
 
 var (
 	eventReady   = []byte("READY")
 	eventResumed = []byte("RESUMED")
-
-	parseErrors   atomic.Uint64
-	eventOverflow atomic.Uint64
 
 	decoderOptions = []jsontext.Options{
 		jsontext.AllowInvalidUTF8(true),
@@ -27,61 +23,12 @@ var (
 	}
 )
 
-func ParseErrors() uint64 {
-	return parseErrors.Load()
-}
-
-func EventTypeOverflows() uint64 {
-	return eventOverflow.Load()
-}
-
 type envelope struct {
-	op                Opcode
+	op                gateway.Opcode
 	seq               int64
-	eventType         [EventTypeMaxLength]byte
+	eventType         [gateway.EventTypeMaxLength]byte
 	eventTypeLen      int
 	eventTypeOverflow bool
-}
-
-func (s *Shard) readFrame(ctx context.Context) ([]byte, error) {
-	_, r, err := s.conn.Reader(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	buf := framepool.Get(0)
-
-	var readErr error
-	for readErr == nil {
-		if len(buf) == cap(buf) {
-			if cap(buf) >= websocketMaxMessageSize {
-				framepool.Put(buf)
-				return nil, fmt.Errorf("gateway frame exceeds %d bytes", websocketMaxMessageSize)
-			}
-
-			bigger := framepool.Get(cap(buf) * 2)
-			bigger = bigger[:cap(bigger)]
-			copy(bigger, buf)
-			bigger = bigger[:len(buf)]
-			framepool.Put(buf)
-			buf = bigger
-		}
-
-		var n int
-		n, readErr = r.Read(buf[len(buf):cap(buf)])
-		buf = buf[:len(buf)+n]
-	}
-
-	if readErr != io.EOF {
-		framepool.Put(buf)
-		return nil, readErr
-	}
-
-	if cap(buf) > framepool.MaxPoolSize {
-		return buf[:len(buf):len(buf)], nil
-	}
-
-	return buf, nil
 }
 
 func resetDecoder(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) {
@@ -125,7 +72,7 @@ func parseEnvelope(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) (envelo
 				return env, err
 			}
 
-			env.op = Opcode(v)
+			env.op = gateway.Opcode(v)
 
 		case "s":
 			if dec.PeekKind() == jsontext.KindNull {
@@ -156,7 +103,7 @@ func parseEnvelope(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) (envelo
 
 			t := tTok.String()
 			env.eventTypeLen = len(t)
-			env.eventTypeOverflow = len(t) > EventTypeMaxLength
+			env.eventTypeOverflow = len(t) > gateway.EventTypeMaxLength
 			copy(env.eventType[:], t)
 
 		default:
@@ -229,14 +176,10 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 	var frameReader bytes.Reader
 
 	for {
-		frame, err := s.readFrame(ctx)
+		frame, err := s.conn.ReadFrame(ctx)
 		if err != nil {
-			if code := websocket.CloseStatus(err); code != -1 {
-				err = &CloseError{
-					Code:      int(code),
-					Resumable: isResumableCloseCode(int(code)),
-					Err:       err,
-				}
+			if code := ws.CloseStatus(err); code != -1 {
+				err = gateway.NewCloseError(code, err)
 			}
 
 			s.failRead(ctx, errChan, nil, err)
@@ -251,13 +194,13 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 			continue
 		}
 
-		if env.op == OpHeartbeatAck {
+		if env.op == gateway.OpHeartbeatAck {
 			s.ackReceived.Store(true)
 			framepool.Put(frame)
 			continue
 		}
 
-		if env.op == OpDispatch {
+		if env.op == gateway.OpDispatch {
 			if !s.handleDispatch(ctx, dec, &frameReader, env, frame, errChan) {
 				return
 			}
@@ -268,8 +211,8 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 		msg := controlMessage{op: env.op}
 
 		switch env.op {
-		case OpHello:
-			var hello RecvHelloData
+		case gateway.OpHello:
+			var hello gateway.RecvHelloData
 			if err := decodeControlData(dec, &frameReader, frame, &hello); err != nil {
 				parseErrors.Add(1)
 				s.failRead(
@@ -280,7 +223,7 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 
 			msg.heartbeatInterval = hello.HeartbeatInterval
 
-		case OpInvalidSession:
+		case gateway.OpInvalidSession:
 			var resumable bool
 			if err := decodeControlData(dec, &frameReader, frame, &resumable); err != nil {
 				parseErrors.Add(1)
@@ -316,7 +259,7 @@ func (s *Shard) handleDispatch(
 	eventType := env.eventType[:env.eventTypeLen]
 
 	if bytes.Equal(eventType, eventReady) {
-		var ready RecvReadyData
+		var ready gateway.RecvReadyData
 		if err := decodeControlData(dec, r, frame, &ready); err != nil {
 			parseErrors.Add(1)
 			s.failRead(
@@ -326,7 +269,7 @@ func (s *Shard) handleDispatch(
 		}
 
 		msg := controlMessage{
-			op:               OpDispatch,
+			op:               gateway.OpDispatch,
 			dispatch:         dispatchReady,
 			sessionID:        ready.SessionID,
 			resumeGatewayURL: ready.ResumeGatewayURL,
@@ -348,7 +291,7 @@ func (s *Shard) handleDispatch(
 
 	if bytes.Equal(eventType, eventResumed) {
 		msg := controlMessage{
-			op:       OpDispatch,
+			op:       gateway.OpDispatch,
 			dispatch: dispatchResumed,
 		}
 

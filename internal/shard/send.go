@@ -1,15 +1,13 @@
-package gateway
+package shard
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
 )
 
 func (s *Shard) lastSequencePtr() *int {
@@ -22,43 +20,27 @@ func (s *Shard) lastSequencePtr() *int {
 	return &v
 }
 
-func (s *Shard) writeJSON(ctx context.Context, payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-	defer cancel()
-
-	if err = s.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
-		return fmt.Errorf("failed to write payload: %w", err)
-	}
-
-	return nil
-}
-
 func (s *Shard) sendHeartbeat(ctx context.Context) error {
 	payload := struct {
-		Op   Opcode `json:"op"`
-		Data *int   `json:"d"`
+		Op   gateway.Opcode `json:"op"`
+		Data *int           `json:"d"`
 	}{
-		Op:   OpHeartbeat,
+		Op:   gateway.OpHeartbeat,
 		Data: s.lastSequencePtr(),
 	}
 
-	return s.writeJSON(ctx, payload)
+	return s.conn.WriteJSON(ctx, payload)
 }
 
 func (s *Shard) identify(ctx context.Context) error {
 	payload := struct {
-		Op   Opcode           `json:"op"`
-		Data sendIdentifyData `json:"d"`
+		Op   gateway.Opcode       `json:"op"`
+		Data gateway.IdentifyData `json:"d"`
 	}{
-		Op: OpIdentify,
-		Data: sendIdentifyData{
+		Op: gateway.OpIdentify,
+		Data: gateway.IdentifyData{
 			Token: s.token,
-			Properties: sendIdentifyProperties{
+			Properties: gateway.IdentifyProperties{
 				OS:      runtime.GOOS,
 				Browser: "portcullis",
 				Device:  "portcullis",
@@ -68,23 +50,23 @@ func (s *Shard) identify(ctx context.Context) error {
 		},
 	}
 
-	return s.writeJSON(ctx, payload)
+	return s.conn.WriteJSON(ctx, payload)
 }
 
 func (s *Shard) resume(ctx context.Context) error {
 	payload := struct {
-		Op   Opcode         `json:"op"`
-		Data sendResumeData `json:"d"`
+		Op   gateway.Opcode     `json:"op"`
+		Data gateway.ResumeData `json:"d"`
 	}{
-		Op: OpResume,
-		Data: sendResumeData{
+		Op: gateway.OpResume,
+		Data: gateway.ResumeData{
 			Token:     s.token,
 			SessionID: s.session.ID,
 			Sequence:  int(s.lastSequence.Load()),
 		},
 	}
 
-	return s.writeJSON(ctx, payload)
+	return s.conn.WriteJSON(ctx, payload)
 }
 
 func (s *Shard) heartbeatTicks(ctx context.Context, intervalMs int) <-chan time.Time {

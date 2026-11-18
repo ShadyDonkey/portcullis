@@ -1,15 +1,7 @@
 package gateway
 
 import (
-	"errors"
 	"fmt"
-)
-
-var (
-	ErrNoHeartbeatAck     = errors.New("heartbeat ack not received")
-	ErrReconnectRequested = errors.New("gateway requested reconnect")
-	ErrHelloTimeout       = errors.New("hello not received in time")
-	ErrControlChannelFull = errors.New("control channel full")
 )
 
 type InvalidSessionError struct {
@@ -27,6 +19,14 @@ type CloseError struct {
 	Code      int
 	Resumable bool
 	Err       error
+}
+
+func NewCloseError(code int, err error) *CloseError {
+	return &CloseError{
+		Code:      code,
+		Resumable: isResumableCloseCode(code),
+		Err:       err,
+	}
 }
 
 func (e *CloseError) Error() string {
@@ -63,10 +63,10 @@ func isFatalCloseCode(code int) bool {
 	}
 }
 
-// closeCodeHint returns one actionable sentence for the gateway close
+// CloseCodeHint returns one actionable sentence for the gateway close
 // codes for the end user.
 // Source: https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
-func closeCodeHint(code int) string {
+func CloseCodeHint(code int) string {
 	switch code {
 	case 4004:
 		return "the bot token is invalid or was reset"

@@ -14,6 +14,7 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/ShadyDonkey/portcullis/internal/observability"
+	"github.com/ShadyDonkey/portcullis/internal/shard"
 )
 
 func main() {
@@ -121,8 +122,8 @@ func run() (returnErr error) {
 		return err
 	}
 
-	shardManager := gateway.NewShardManager(
-		gateway.ShardManagerConfig{
+	shardManager := shard.NewManager(
+		shard.Config{
 			URL:             info.URL,
 			Token:           cfg.Discord.Token.Reveal(),
 			Intents:         int(intents),
@@ -139,8 +140,8 @@ func run() (returnErr error) {
 		observability.MetricsSources{
 			PublishStats:      js.PublishStats,
 			ShardStatuses:     shardManager.Statuses,
-			ParseErrors:       gateway.ParseErrors,
-			EventTypeOverflow: gateway.EventTypeOverflows,
+			ParseErrors:       shard.ParseErrors,
+			EventTypeOverflow: shard.EventTypeOverflows,
 			OversizedFrames:   framepool.OversizedFrames,
 		},
 	); err != nil {

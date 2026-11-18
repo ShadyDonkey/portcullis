@@ -6,68 +6,50 @@ import (
 	"time"
 )
 
-type exitAction int
+type ExitAction int
 
 const (
-	exitStop exitAction = iota
-	exitResume
-	exitReidentify
+	ExitStop ExitAction = iota
+	ExitResume
+	ExitReidentify
 )
 
-func (a exitAction) String() string {
+func (a ExitAction) String() string {
 	switch a {
-	case exitStop:
+	case ExitStop:
 		return "stop"
-	case exitResume:
+	case ExitResume:
 		return "resume"
-	case exitReidentify:
+	case ExitReidentify:
 		return "reidentify"
 	default:
 		return "unknown"
 	}
 }
 
-func errorToExitAction(err error) exitAction {
+func ErrorToExitAction(err error) ExitAction {
 	if closeErr, ok := errors.AsType[*CloseError](err); ok {
 		switch {
 		case isFatalCloseCode(closeErr.Code):
-			return exitStop
+			return ExitStop
 		case closeErr.Resumable:
-			return exitResume
+			return ExitResume
 		default:
-			return exitReidentify
+			return ExitReidentify
 		}
 	}
 
 	if invalid, ok := errors.AsType[*InvalidSessionError](err); ok {
 		if invalid.Resumable {
-			return exitResume
+			return ExitResume
 		}
 
-		return exitReidentify
+		return ExitReidentify
 	}
 
-	return exitResume
+	return ExitResume
 }
 
-type backoff struct {
-	currentDelay time.Duration
-}
-
-func (b *backoff) reset() {
-	b.currentDelay = 0
-}
-
-func (b *backoff) next() time.Duration {
-	if b.currentDelay == 0 {
-		b.currentDelay = reconnectMinDelay
-	} else {
-		b.currentDelay = min(b.currentDelay*2, reconnectMaxDelay)
-	}
-
-	return b.currentDelay/2 + rand.N(b.currentDelay/2)
-}
-
-func reidentifyDelay() time.Duration {
+func ReidentifyDelay() time.Duration {
 	return time.Second + rand.N(4*time.Second)
 }

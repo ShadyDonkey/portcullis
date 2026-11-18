@@ -5,29 +5,8 @@ import (
 )
 
 const (
-	Version          = 10
-	DefaultEncoding  = "json"
-	writeTimeout     = 5 * time.Second
-	helloTimeout     = 10 * time.Second
-	identifyInterval = 5*time.Second + 500*time.Millisecond
-	controlChanSize  = 16
-
-	// TODO: make everything below this configurable with default fallbacks
-	reconnectMinDelay       = 1 * time.Second
-	reconnectMaxDelay       = 60 * time.Second
-	reconnectStableAfter    = 2 * time.Minute
-	shardShutdownTimeout    = 15 * time.Second
-	websocketMaxMessageSize = 128 << 20
-	sessionStoreTimeout     = 1 * time.Second
-
-	// If this many consecutive connections each live shorter than reconnectStableAfter
-	// then reconnecting cannot succeed, stop there instead of burning the daily
-	// identify budget on fresh identifies.
-	maxConsecutiveUnstableExits = 5
-
-	// Max retries on websocket connections to force stopping when Discord GW is down
-	// or some other network failure.
-	maxDialRetries = 30
-	
+	Version            = 10
+	DefaultEncoding    = "json"
+	identifyInterval   = 5*time.Second + 500*time.Millisecond
 	EventTypeMaxLength = 40
 )

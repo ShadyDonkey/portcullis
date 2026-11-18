@@ -11,20 +11,20 @@ type RecvReadyData struct {
 }
 
 // TODO: do we need compress and large_threshold here?
-type sendIdentifyData struct {
-	Token      string                 `json:"token"`
-	Properties sendIdentifyProperties `json:"properties"`
-	Shard      *[2]int                `json:"shard,omitempty"`
-	Intents    int                    `json:"intents"`
+type IdentifyData struct {
+	Token      string             `json:"token"`
+	Properties IdentifyProperties `json:"properties"`
+	Shard      *[2]int            `json:"shard,omitempty"`
+	Intents    int                `json:"intents"`
 }
 
-type sendResumeData struct {
+type ResumeData struct {
 	Token     string `json:"token"`
 	SessionID string `json:"session_id"`
 	Sequence  int    `json:"seq"`
 }
 
-type sendIdentifyProperties struct {
+type IdentifyProperties struct {
 	OS      string `json:"os"`
 	Browser string `json:"browser"`
 	Device  string `json:"device"`
