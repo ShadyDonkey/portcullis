@@ -101,10 +101,12 @@ func parseEnvelope(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) (envelo
 				return env, err
 			}
 
-			t := tTok.String()
-			env.eventTypeLen = len(t)
-			env.eventTypeOverflow = len(t) > gateway.EventTypeMaxLength
-			copy(env.eventType[:], t)
+			if tTok.Kind() == jsontext.KindString {
+				t := tTok.String()
+				env.eventTypeLen = len(t)
+				env.eventTypeOverflow = len(t) > gateway.EventTypeMaxLength
+				copy(env.eventType[:], t)
+			}
 
 		default:
 			if err := dec.SkipValue(); err != nil {
@@ -306,13 +308,13 @@ func (s *Shard) handleDispatch(
 
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(
-			ctx, "received event", "type", string(eventType), "data", frame, "seq", env.seq,
+			ctx, "received event", "type", string(eventType), "data", string(frame), "seq", env.seq,
 		)
 	}
 
 	if !s.filter.Allow(eventType) {
 		if slog.Default().Enabled(ctx, slog.LevelDebug) {
-			slog.DebugContext(ctx, "disallowed event", "type", string(eventType), "data", frame)
+			slog.DebugContext(ctx, "disallowed event", "type", string(eventType), "data", string(frame))
 		}
 
 		framepool.Put(frame)
