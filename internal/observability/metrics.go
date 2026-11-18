@@ -13,6 +13,8 @@ import (
 type MetricsSources struct {
 	PublishStats      func() jetstream.PublishStats
 	ShardStatuses     func() map[int]shard.Status
+	ShardReconnects   func() map[int]uint64
+	NATSReconnects    func() uint64
 	ParseErrors       func() uint64
 	EventTypeOverflow func() uint64
 	OversizedFrames   func() uint64
@@ -43,6 +45,16 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 	up, err := m.Int64ObservableGauge("portcullis.shard.up")
 	if err != nil {
 		return fmt.Errorf("create shard.up metric: %w", err)
+	}
+
+	shardReconnects, err := m.Int64ObservableCounter("portcullis.shard.reconnects")
+	if err != nil {
+		return fmt.Errorf("create shard.reconnects metric: %w", err)
+	}
+
+	natsReconnects, err := m.Int64ObservableCounter("portcullis.nats.reconnects")
+	if err != nil {
+		return fmt.Errorf("create nats.reconnects metric: %w", err)
 	}
 
 	ringEvictions, err := m.Int64ObservableCounter("portcullis.publisher.ring_evictions")
@@ -109,6 +121,17 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 				)
 			}
 
+			for id, count := range sources.ShardReconnects() {
+				ob.ObserveInt64(
+					shardReconnects, int64(count),
+					otelmetric.WithAttributes(
+						attribute.Int("shard_id", id),
+					),
+				)
+			}
+
+			ob.ObserveInt64(natsReconnects, int64(sources.NATSReconnects()))
+
 			return nil
 		},
 		drops,
@@ -122,6 +145,8 @@ func (o *Observability) RegisterMetrics(sources MetricsSources) error {
 		overflow,
 		inFlight,
 		ringOccupancy,
+		shardReconnects,
+		natsReconnects,
 	)
 	if err != nil {
 		return fmt.Errorf("register metrics callback: %w", err)

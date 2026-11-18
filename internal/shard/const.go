@@ -8,7 +8,6 @@ const (
 	helloTimeout    = 10 * time.Second
 	controlChanSize = 16
 
-	// TODO: make everything below this configurable with default fallbacks
 	reconnectMinDelay       = 1 * time.Second
 	reconnectMaxDelay       = 60 * time.Second
 	reconnectStableAfter    = 2 * time.Minute

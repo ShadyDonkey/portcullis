@@ -35,6 +35,7 @@ type Shard struct {
 	conn         *ws.Conn
 	control      chan controlMessage
 	ackReceived  atomic.Bool
+	connected    atomic.Bool
 	lastSequence atomic.Int64
 	token        string
 	intents      int
@@ -88,7 +89,7 @@ func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
 
 	dialURL, err = gateway.BuildURL(dialURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse gateway URL: %w", err)
+		return nil, err
 	}
 
 	conn, err := ws.Dial(ctx, dialURL, websocketMaxMessageSize)
@@ -123,6 +124,7 @@ func (s *Shard) Close() error {
 func (s *Shard) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer s.connected.Store(false)
 	defer s.persistSession(context.WithoutCancel(ctx))
 
 	errCh := make(chan error, 1)
@@ -221,10 +223,12 @@ func (s *Shard) handleControl(ctx, runCtx context.Context, m controlMessage, st 
 				ResumeGatewayURL: m.resumeGatewayURL,
 			}
 
+			s.connected.Store(true)
 			s.persistSession(ctx)
 			return nil
 
 		case dispatchResumed:
+			s.connected.Store(true)
 			slog.InfoContext(ctx, "session resumed", "shard_id", s.id)
 			return nil
 		}

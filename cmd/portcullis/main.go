@@ -117,8 +117,8 @@ func run() (returnErr error) {
 		ctx, "Starting shard manager", "url", info.URL, "intents", intents, "num_shards", numShards,
 	)
 
-	if err := reconcileProxyState(ctx, js, intents, numShards); err != nil {
-		slog.ErrorContext(ctx, "failed to reconcile proxy state", "err", err)
+	if err := reconcileGlobalState(ctx, js, intents, numShards); err != nil {
+		slog.ErrorContext(ctx, "failed to reconcile global state", "err", err)
 		return err
 	}
 
@@ -140,6 +140,8 @@ func run() (returnErr error) {
 		observability.MetricsSources{
 			PublishStats:      js.PublishStats,
 			ShardStatuses:     shardManager.Statuses,
+			ShardReconnects:   shardManager.Reconnects,
+			NATSReconnects:    js.NATSReconnects,
 			ParseErrors:       shard.ParseErrors,
 			EventTypeOverflow: shard.EventTypeOverflows,
 			OversizedFrames:   framepool.OversizedFrames,
@@ -161,7 +163,7 @@ func run() (returnErr error) {
 				case fatal <- fmt.Errorf("shard %d failed: %w", id, err):
 				default:
 					slog.WarnContext(
-						ctx, fmt.Sprintf("additional shard failure on %d", id), "shard_id", id, "err", err,
+						ctx, "additional shard failure", "shard_id", id, "err", err,
 					)
 				}
 			}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
@@ -30,10 +31,11 @@ type Config struct {
 }
 
 type managedShard struct {
-	shard  *Shard
-	cancel context.CancelFunc
-	done   chan struct{}
-	err    error
+	shard      *Shard
+	cancel     context.CancelFunc
+	done       chan struct{}
+	err        error
+	reconnects atomic.Uint64
 }
 
 type Status int
@@ -43,6 +45,7 @@ const (
 	StatusRunning
 	StatusStopped
 	StatusFailed
+	StatusReconnecting
 )
 
 func (s Status) String() string {
@@ -53,6 +56,8 @@ func (s Status) String() string {
 		return "stopped"
 	case StatusFailed:
 		return "failed"
+	case StatusReconnecting:
+		return "reconnecting"
 	default:
 		return "unknown"
 	}
@@ -205,7 +210,10 @@ func statusOf(ms *managedShard) Status {
 		}
 		return StatusStopped
 	default:
-		return StatusRunning
+		if ms.shard.connected.Load() {
+			return StatusRunning
+		}
+		return StatusReconnecting
 	}
 }
 
@@ -231,4 +239,16 @@ func (m *Manager) Statuses() map[int]Status {
 	}
 
 	return statuses
+}
+
+func (m *Manager) Reconnects() map[int]uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	counts := make(map[int]uint64, len(m.shards))
+	for id, ms := range m.shards {
+		counts[id] = ms.reconnects.Load()
+	}
+
+	return counts
 }

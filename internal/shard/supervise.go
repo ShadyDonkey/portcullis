@@ -75,7 +75,10 @@ func (m *Manager) supervise(ctx context.Context, id int, ms *managedShard) {
 			break
 		}
 
+		m.mu.Lock()
 		ms.shard = shard
+		ms.reconnects.Add(1)
+		m.mu.Unlock()
 	}
 
 	ms.cancel()

@@ -35,6 +35,7 @@ func dialNATS(config Config, j *JetStream) (*nats.Conn, error) {
 		),
 		nats.ReconnectHandler(
 			func(nc *nats.Conn) {
+				j.natsReconnects.Add(1)
 				slog.Info("NATS re-connected", "url", nc.ConnectedUrl())
 			},
 		),

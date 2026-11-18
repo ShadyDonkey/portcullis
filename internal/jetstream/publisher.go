@@ -10,6 +10,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+const (
+	dropReasonByteCapDrop       = "byte_cap_drop"
+	dropReasonPublishAfterClose = "publish_after_close"
+	dropReasonShutdownDrop      = "shutdown_drop"
+)
+
 type ringSlot struct {
 	eventType    [gateway.EventTypeMaxLength]byte
 	eventTypeLen int
@@ -27,7 +33,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 
 	if j.isStopping() {
 		j.pubMu.Unlock()
-		j.dropFailures.record("publish_after_close", errors.New("publisher is closed"))
+		j.dropFailures.record(dropReasonPublishAfterClose, errors.New("publisher is closed"))
 		j.recycleFrame(frame)
 		return errors.New("publish: publisher is closed")
 	}
@@ -39,8 +45,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 		if j.ringLen == 0 {
 			j.byteCapDrops.Add(1)
 			j.pubMu.Unlock()
-			// TODO: maybe add these strings to a const list
-			j.dropFailures.record("byte_cap_drop", jetstream.ErrTooManyStalledMsgs)
+			j.dropFailures.record(dropReasonByteCapDrop, jetstream.ErrTooManyStalledMsgs)
 			j.recycleFrame(frame)
 			return fmt.Errorf("publish: %w", jetstream.ErrTooManyStalledMsgs)
 		}
@@ -134,7 +139,7 @@ func (j *JetStream) hasSubmitRoom() bool {
 
 func (j *JetStream) submit(slot ringSlot) {
 	if j.noMoreSubmits() {
-		j.dropSlot(slot, "shutdown_drop")
+		j.dropSlot(slot, dropReasonShutdownDrop)
 		return
 	}
 
@@ -190,7 +195,7 @@ func (j *JetStream) drainRemaining() {
 		}
 
 		if j.noMoreSubmits() || !j.hasSubmitRoom() {
-			j.dropSlot(slot, "shutdown_drop")
+			j.dropSlot(slot, dropReasonShutdownDrop)
 			continue
 		}
 

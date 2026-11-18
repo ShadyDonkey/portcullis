@@ -9,7 +9,7 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 )
 
-func reconcileProxyState(
+func reconcileGlobalState(
 	ctx context.Context, js *jetstream.JetStream, intents gateway.Intent, numShards int,
 ) error {
 	want := jetstream.GlobalState{
@@ -30,10 +30,11 @@ func reconcileProxyState(
 	clearUpTo := want.NumShards
 	if stored != nil {
 		clearUpTo = max(clearUpTo, stored.NumShards)
-		slog.WarnContext(
-			ctx, "global state changed, clearing all sessions",
+		slog.ErrorContext(
+			ctx, "global state mismatch, clearing all sessions",
 			"old_intents", stored.Intents, "new_intents", want.Intents,
 			"old_num_shards", stored.NumShards, "new_num_shards", want.NumShards,
+			"clear_up_to", clearUpTo,
 		)
 	} else {
 		slog.InfoContext(ctx, "no stored global state, clearing all sessions")

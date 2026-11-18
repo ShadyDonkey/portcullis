@@ -2,17 +2,28 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/config"
+	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/carlmjohnson/requests"
 )
 
-const identifyBudgetMargin = 10
+const (
+	identifyBudgetMargin    = 10
+	gatewayBotMaxAttempts   = 4
+	gatewayBotBaseBackoff   = 1 * time.Second
+	gatewayBotRetryAfterCap = 30 * time.Second
+)
+
+var version = "dev"
 
 type sessionStartLimit struct {
 	Total          int `json:"total"`
@@ -34,24 +45,117 @@ func newDiscordClient(token string) *http.Client {
 			RoundTripper: http.DefaultTransport,
 			Headers: http.Header{
 				"Authorization": {fmt.Sprintf("Bot %s", token)},
-				// TODO: replace with real build version
-				"User-Agent": {fmt.Sprintf("DiscordBot (https://portcullisgw.com, %s)", "0.0.0")},
+				"User-Agent":    {fmt.Sprintf("DiscordBot (https://portcullisgw.com, %s)", version)},
 			},
 		},
 	}
 }
 
 func fetchGatewayBot(ctx context.Context, client *http.Client) (gatewayBotResponse, error) {
-	var resp gatewayBotResponse
-
 	// TODO: Add config do the base URL (ref: nirn)
-	err := requests.
-		URL("https://discord.com/api/v10/gateway/bot").
-		Client(client).
-		ToJSON(&resp).
-		Fetch(ctx)
+	endpoint := fmt.Sprintf("https://discord.com/api/v%d/gateway/bot", gateway.Version)
 
-	return resp, err
+	var resp gatewayBotResponse
+	backoff := gatewayBotBaseBackoff
+
+	for attempt := 1; ; attempt++ {
+		headers := map[string][]string{}
+
+		err := requests.
+			URL(endpoint).
+			Client(client).
+			AddValidator(requests.ChainHandlers(requests.CopyHeaders(headers), requests.DefaultValidator)).
+			ToJSON(&resp).
+			Fetch(ctx)
+
+		if err == nil {
+			break
+		}
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return gatewayBotResponse{}, ctxErr
+		}
+
+		var se *requests.ResponseError
+		switch {
+		case errors.As(err, &se) && se.StatusCode == http.StatusUnauthorized:
+			return gatewayBotResponse{}, fmt.Errorf("discord rejected the bot token (HTTP 401): %w", err)
+
+		case errors.As(err, &se) && se.StatusCode == http.StatusTooManyRequests:
+			if attempt == gatewayBotMaxAttempts {
+				return gatewayBotResponse{}, fmt.Errorf("fetch gateway/bot failed after %d attempts: %w", attempt, err)
+			}
+			delay := retryAfterDelay(headers, backoff)
+			slog.WarnContext(ctx, "gateway/bot rate limited, retrying", "attempt", attempt, "delay", delay)
+			if waitErr := sleepCtx(ctx, delay); waitErr != nil {
+				return gatewayBotResponse{}, waitErr
+			}
+
+		case errors.As(err, &se) && se.StatusCode >= 500, errors.Is(err, requests.ErrTransport):
+			if attempt == gatewayBotMaxAttempts {
+				return gatewayBotResponse{}, fmt.Errorf("fetch gateway/bot failed after %d attempts: %w", attempt, err)
+			}
+			slog.WarnContext(
+				ctx, "gateway/bot fetch failed, retrying", "attempt", attempt, "delay", backoff, "err", err,
+			)
+			if waitErr := sleepCtx(ctx, backoff); waitErr != nil {
+				return gatewayBotResponse{}, waitErr
+			}
+			backoff *= 2
+
+		default:
+			return gatewayBotResponse{}, fmt.Errorf("fetch gateway/bot failed: %w", err)
+		}
+	}
+
+	if err := validateGatewayBot(resp); err != nil {
+		return gatewayBotResponse{}, err
+	}
+
+	return resp, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func retryAfterDelay(headers map[string][]string, fallback time.Duration) time.Duration {
+	if vals := headers["Retry-After"]; len(vals) > 0 {
+		if secs, err := strconv.ParseFloat(vals[0], 64); err == nil && secs > 0 {
+			return min(time.Duration(secs*float64(time.Second)), gatewayBotRetryAfterCap)
+		}
+	}
+	return fallback
+}
+
+func validateGatewayBot(resp gatewayBotResponse) error {
+	if resp.URL == "" {
+		return errors.New("gateway/bot response missing gateway URL")
+	}
+
+	if u, err := url.Parse(resp.URL); err != nil || u.Scheme != "wss" || u.Host == "" {
+		return fmt.Errorf("gateway/bot response has invalid gateway URL %q", resp.URL)
+	}
+
+	if resp.Shards < 1 {
+		return fmt.Errorf("gateway/bot response has invalid shard count %d", resp.Shards)
+	}
+
+	l := resp.SessionStartLimit
+
+	if l.Total < 1 || l.MaxConcurrency < 1 || l.ResetAfter < 0 {
+		return fmt.Errorf("gateway/bot response has invalid session_start_limit %+v", l)
+	}
+
+	return nil
 }
 
 func resolveSharding(

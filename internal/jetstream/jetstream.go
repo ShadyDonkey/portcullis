@@ -48,6 +48,7 @@ type JetStream struct {
 	stalledDrops    atomic.Uint64
 	syncErrors      atomic.Uint64
 	ackErrors       atomic.Uint64
+	natsReconnects  atomic.Uint64
 	stallFailures   failureLog
 	syncFailures    failureLog
 	ackFailures     failureLog
@@ -147,6 +148,10 @@ func New(ctx context.Context, config Config) (*JetStream, error) {
 
 func (j *JetStream) UnexpectedClose() <-chan error {
 	return j.unexpectedClose
+}
+
+func (j *JetStream) NATSReconnects() uint64 {
+	return j.natsReconnects.Load()
 }
 
 func (j *JetStream) Close() {
