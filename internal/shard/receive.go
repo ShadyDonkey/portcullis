@@ -15,22 +15,20 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/ws"
 )
 
-var (
-	eventReady   = []byte("READY")
-	eventResumed = []byte("RESUMED")
-
-	decoderOptions = []jsontext.Options{
-		jsontext.AllowInvalidUTF8(true),
-		jsontext.AllowDuplicateNames(true),
-	}
+const (
+	eventReady   = "READY"
+	eventResumed = "RESUMED"
 )
 
+var decoderOptions = []jsontext.Options{
+	jsontext.AllowInvalidUTF8(true),
+	jsontext.AllowDuplicateNames(true),
+}
+
 type envelope struct {
-	op                gateway.Opcode
-	seq               int64
-	eventType         [gateway.EventTypeMaxLength]byte
-	eventTypeLen      int
-	eventTypeOverflow bool
+	op        gateway.Opcode
+	seq       int64
+	eventType string
 }
 
 func resetDecoder(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) {
@@ -104,10 +102,7 @@ func parseEnvelope(dec *jsontext.Decoder, r *bytes.Reader, frame []byte) (envelo
 			}
 
 			if tTok.Kind() == jsontext.KindString {
-				t := tTok.String()
-				env.eventTypeLen = len(t)
-				env.eventTypeOverflow = len(t) > gateway.EventTypeMaxLength
-				copy(env.eventType[:], t)
+				env.eventType = tTok.String()
 			}
 
 		default:
@@ -211,9 +206,7 @@ func (s *Shard) readLoop(ctx context.Context, errChan chan<- error) {
 				return
 			}
 
-			if !env.eventTypeOverflow {
-				metrics.Dispatch(env.eventType[:env.eventTypeLen], time.Since(readDone))
-			}
+			metrics.Dispatch(env.eventType, time.Since(readDone))
 
 			continue
 		}
@@ -260,16 +253,16 @@ func (s *Shard) handleDispatch(
 ) bool {
 	s.lastSequence.Store(env.seq)
 
-	if env.eventTypeOverflow || env.eventTypeLen == 0 {
-		metrics.ShardDrop(metrics.DropTypeOverflow)
+	if env.eventType == "" {
+		metrics.ShardDrop(metrics.DropParseError)
 		framepool.Put(frame)
 		return true
 	}
 
-	eventType := env.eventType[:env.eventTypeLen]
+	eventType := env.eventType
 	metrics.Consumed(eventType)
 
-	if bytes.Equal(eventType, eventReady) {
+	if eventType == eventReady {
 		var ready gateway.RecvReadyData
 		if err := decodeControlData(dec, r, frame, &ready); err != nil {
 			metrics.ShardDrop(metrics.DropParseError)
@@ -300,7 +293,7 @@ func (s *Shard) handleDispatch(
 		return true
 	}
 
-	if bytes.Equal(eventType, eventResumed) {
+	if eventType == eventResumed {
 		msg := controlMessage{
 			op:       gateway.OpDispatch,
 			dispatch: dispatchResumed,
@@ -317,7 +310,7 @@ func (s *Shard) handleDispatch(
 
 	if slog.Default().Enabled(ctx, slog.LevelDebug) {
 		slog.DebugContext(
-			ctx, "received event", "type", string(eventType), "data", string(frame), "seq", env.seq,
+			ctx, "received event", "type", eventType, "data", string(frame), "seq", env.seq,
 		)
 	}
 
@@ -325,7 +318,7 @@ func (s *Shard) handleDispatch(
 		metrics.ShardDrop(metrics.DropFiltered)
 
 		if slog.Default().Enabled(ctx, slog.LevelDebug) {
-			slog.DebugContext(ctx, "disallowed event", "type", string(eventType), "data", string(frame))
+			slog.DebugContext(ctx, "disallowed event", "type", eventType, "data", string(frame))
 		}
 
 		framepool.Put(frame)

@@ -9,9 +9,8 @@ import (
 )
 
 const (
-	DropFiltered     = "filtered"
-	DropParseError   = "parse_error"
-	DropTypeOverflow = "type_overflow"
+	DropFiltered   = "filtered"
+	DropParseError = "parse_error"
 
 	DropAfterClose  = "after_close"
 	DropShutdown    = "shutdown"
@@ -24,19 +23,19 @@ const (
 
 var measureCtx = context.Background()
 
-func Consumed(eventType []byte) {
-	eventsConsumed.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", string(eventType))))
+func Consumed(eventType string) {
+	eventsConsumed.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", eventType)))
 }
 
-func Published(eventType []byte) {
-	eventsPublished.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", string(eventType))))
+func Published(eventType string) {
+	eventsPublished.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", eventType)))
 }
 
-func Dispatch(eventType []byte, d time.Duration) {
+func Dispatch(eventType string, d time.Duration) {
 	dispatchDuration.Record(
 		measureCtx,
 		float64(d)/float64(time.Millisecond),
-		otelmetric.WithAttributes(attribute.String("event_type", string(eventType))),
+		otelmetric.WithAttributes(attribute.String("event_type", eventType)),
 	)
 }
 

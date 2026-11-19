@@ -5,8 +5,7 @@ import (
 )
 
 const (
-	Version            = 10
-	DefaultEncoding    = "json"
-	identifyInterval   = 5*time.Second + 500*time.Millisecond
-	EventTypeMaxLength = 40
+	Version          = 10
+	DefaultEncoding  = "json"
+	identifyInterval = 5*time.Second + 500*time.Millisecond
 )

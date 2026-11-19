@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/framepool"
-	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -19,16 +18,15 @@ const (
 )
 
 type ringSlot struct {
-	eventType    [gateway.EventTypeMaxLength]byte
-	eventTypeLen int
-	frame        []byte
+	eventType string
+	frame     []byte
 }
 
-func (j *JetStream) buildSubject(eventType []byte) string {
-	return j.subjectPrefix + "." + string(eventType)
+func (j *JetStream) buildSubject(eventType string) string {
+	return j.subjectPrefix + "." + eventType
 }
 
-func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte) error {
+func (j *JetStream) Publish(ctx context.Context, eventType string, frame []byte) error {
 	size := int64(len(frame))
 	metrics.Payload(len(frame))
 
@@ -64,8 +62,7 @@ func (j *JetStream) Publish(ctx context.Context, eventType []byte, frame []byte)
 	}
 
 	slot := &j.ring[(j.ringHead+j.ringLen)%len(j.ring)]
-	copy(slot.eventType[:], eventType)
-	slot.eventTypeLen = len(eventType)
+	slot.eventType = eventType
 	slot.frame = frame
 
 	j.ringLen++
@@ -148,7 +145,7 @@ func (j *JetStream) submit(slot ringSlot) {
 		return
 	}
 
-	subject := j.buildSubject(slot.eventType[:slot.eventTypeLen])
+	subject := j.buildSubject(slot.eventType)
 	_, err := j.js.PublishAsync(subject, slot.frame, jetstream.WithStallWait(publishStallWait))
 	if err != nil {
 		if errors.Is(err, jetstream.ErrTooManyStalledMsgs) {

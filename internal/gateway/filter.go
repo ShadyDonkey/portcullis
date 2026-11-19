@@ -22,11 +22,11 @@ func NewEventFilter(names []string) EventFilter {
 	return f
 }
 
-func (f EventFilter) Allow(eventType []byte) bool {
+func (f EventFilter) Allow(eventType string) bool {
 	if f.all {
 		return true
 	}
 
-	_, ok := f.set[string(eventType)]
+	_, ok := f.set[eventType]
 	return ok
 }
