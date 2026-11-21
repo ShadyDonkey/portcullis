@@ -38,8 +38,7 @@ func NewEvent(frame []byte, eventType string, shard int, sequence int, receivedA
 
 func (e *Event) Retain() {
 	if e.refs.Add(1) <= 1 {
-		// TODO: don't use panic?
-		panic("bridge: retain called on a released Event")
+		panic("bridge: Retain called on an Event that was already released")
 	}
 }
 

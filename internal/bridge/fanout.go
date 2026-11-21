@@ -19,11 +19,14 @@ type Options struct {
 	Slots   int
 	ByteCap int64
 	OnDrop  func(bridge, reason string)
+	OnFatal func(error)
 	Logger  *slog.Logger
 }
 
 type Fanout struct {
 	runners []*runner
+	fatal   func(error)
+	logger  *slog.Logger
 }
 
 type runner struct {
@@ -31,6 +34,8 @@ type runner struct {
 	b        Bridge
 	q        *queue
 	fail     *FailureLog
+	log      *slog.Logger
+	fatal    func(error)
 	done     chan struct{}
 	inFlight atomic.Int64
 }
@@ -60,9 +65,15 @@ func NewFanout(entries []Entry, opts Options) (*Fanout, error) {
 		onDrop = func(string, string) {}
 	}
 
-	f := &Fanout{runners: make([]*runner, 0, len(entries))}
+	f := &Fanout{
+		runners: make([]*runner, 0, len(entries)),
+		fatal:   opts.OnFatal,
+		logger:  logger,
+	}
 
 	for _, entry := range entries {
+		bridgeLog := logger.With("bridge", entry.Name)
+
 		r := &runner{
 			name: entry.Name,
 			b:    entry.Bridge,
@@ -72,8 +83,10 @@ func NewFanout(entries []Entry, opts Options) (*Fanout, error) {
 					onDrop(entry.Name, reason)
 				},
 			),
-			fail: NewFailureLog(logger.With("bridge", entry.Name)),
-			done: make(chan struct{}),
+			fail:  NewFailureLog(bridgeLog),
+			log:   bridgeLog,
+			fatal: opts.OnFatal,
+			done:  make(chan struct{}),
 		}
 
 		f.runners = append(f.runners, r)
@@ -92,20 +105,39 @@ func (r *runner) run() {
 			return
 		}
 
-		metrics.BridgeConsumed(r.name, e.Type)
-
-		size := int64(len(e.Frame))
-		r.inFlight.Add(size)
-		err := r.b.Deliver(e)
-		r.inFlight.Add(-size)
-
-		if err != nil {
-			r.fail.Record("deliver", err)
+		if !r.deliverOnce(e) {
+			return
 		}
 	}
 }
 
+func (r *runner) deliverOnce(e *Event) (ok bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			FatalInvariant(r.fatal, r.log, r.name, "deliver", rec)
+			ok = false
+		}
+	}()
+
+	metrics.BridgeConsumed(r.name, e.Type)
+
+	size := int64(len(e.Frame))
+	r.inFlight.Add(size)
+	err := r.b.Deliver(e)
+	r.inFlight.Add(-size)
+
+	if err != nil {
+		r.fail.Record("deliver", err)
+	}
+
+	return true
+}
+
 func (f *Fanout) Send(e *Event) {
+	defer func() {
+		FatalInvariant(f.fatal, f.logger, "fanout", "Send", recover())
+	}()
+
 	for range len(f.runners) - 1 {
 		e.Retain()
 	}
@@ -138,7 +170,15 @@ func (f *Fanout) Close(ctx context.Context) error {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			r.q.abandon()
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						LogInvariant(f.logger, r.name, "queue abandon", rec)
+					}
+				}()
+
+				r.q.abandon()
+			}()
 		}
 	}
 

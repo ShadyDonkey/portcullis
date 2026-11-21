@@ -28,14 +28,12 @@ const (
 	backoffBase    = 250 * time.Millisecond
 )
 
-func init() {
-	bridge.Register(
-		bridge.Factory{
-			Name:      "webhook",
-			NewConfig: func() bridge.Config { return defaultConfig() },
-			New:       newBridge,
-		},
-	)
+func Factory() bridge.Factory {
+	return bridge.Factory{
+		Name:      "webhook",
+		NewConfig: func() bridge.Config { return defaultConfig() },
+		New:       newBridge,
+	}
 }
 
 type Bridge struct {

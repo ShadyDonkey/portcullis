@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,14 +24,12 @@ const (
 	publishMaxPending      = 4096
 )
 
-func init() {
-	bridge.Register(
-		bridge.Factory{
-			Name:      "jetstream",
-			NewConfig: func() bridge.Config { return defaultConfig() },
-			New:       newBridge,
-		},
-	)
+func Factory() bridge.Factory {
+	return bridge.Factory{
+		Name:      "jetstream",
+		NewConfig: func() bridge.Config { return defaultConfig() },
+		New:       newBridge,
+	}
 }
 
 type pendingEvent struct {
@@ -43,6 +42,8 @@ type Bridge struct {
 	js           natsjs.JetStream
 	name         string
 	prefix       string
+	log          *slog.Logger
+	fatal        func(error)
 	mu           sync.Mutex
 	pending      map[uintptr]pendingEvent
 	pendingBytes atomic.Int64
@@ -62,6 +63,8 @@ func newBridge(ctx context.Context, c bridge.Config, env bridge.Env) (bridge.Bri
 	b := &Bridge{
 		name:        env.Name,
 		prefix:      cfg.Stream.SubjectPrefix,
+		log:         env.Logger,
+		fatal:       env.Fatal,
 		pending:     make(map[uintptr]pendingEvent),
 		room:        make(chan struct{}, 1),
 		stop:        make(chan struct{}),
@@ -211,18 +214,26 @@ func (b *Bridge) Close(ctx context.Context) error {
 		b.js.CleanupPublisher()
 	}
 
-	// Anything still tracked will never get an ack or error callback.
 	b.mu.Lock()
 	leftover := b.pending
 	b.pending = make(map[uintptr]pendingEvent)
 	b.mu.Unlock()
 
 	var leftoverBytes int64
-	for _, p := range leftover {
-		leftoverBytes += int64(len(p.event.Frame))
-		metrics.BridgeDrop(b.name, metrics.DropShutdown)
-		p.event.Release()
-	}
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				bridge.LogInvariant(b.log, b.name, "close leftovers", rec)
+			}
+		}()
+
+		for _, p := range leftover {
+			leftoverBytes += int64(len(p.event.Frame))
+			metrics.BridgeDrop(b.name, metrics.DropShutdown)
+			p.event.Release()
+		}
+	}()
 
 	b.pendingBytes.Add(-leftoverBytes)
 
@@ -232,6 +243,10 @@ func (b *Bridge) Close(ctx context.Context) error {
 }
 
 func (b *Bridge) onAck(_ natsjs.JetStream, msg *nats.Msg, _ *natsjs.PubAck) {
+	defer func() {
+		bridge.FatalInvariant(b.fatal, b.log, b.name, "async ack", recover())
+	}()
+
 	if p, ok := b.take(msg.Data); ok {
 		metrics.Ack(b.name, p.event.Type, time.Since(p.enqueuedAt))
 		p.event.Release()
@@ -241,6 +256,10 @@ func (b *Bridge) onAck(_ natsjs.JetStream, msg *nats.Msg, _ *natsjs.PubAck) {
 }
 
 func (b *Bridge) onError(_ natsjs.JetStream, msg *nats.Msg, err error) {
+	defer func() {
+		bridge.FatalInvariant(b.fatal, b.log, b.name, "async publish error", recover())
+	}()
+
 	b.ackFailures.Record("async_ack", err, "subject", msg.Subject)
 	metrics.BridgeDrop(b.name, metrics.DropAckError)
 

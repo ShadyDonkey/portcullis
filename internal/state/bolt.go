@@ -140,7 +140,7 @@ func (b *Bolt) initAndLoad() error {
 
 			meta := tx.Bucket(bucketMeta)
 
-			if v := meta.Get(keyGlobal); v != nil {
+			if v := meta.Get(keySchema); v != nil {
 				if len(v) != 4 || binary.BigEndian.Uint32(v) > schemaVersion {
 					return errors.New("state file was written by a new version of Portcullis")
 				}

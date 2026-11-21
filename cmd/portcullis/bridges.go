@@ -2,19 +2,35 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/bridge"
+	"github.com/ShadyDonkey/portcullis/internal/bridge/jetstream"
+	"github.com/ShadyDonkey/portcullis/internal/bridge/webhook"
 	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/metrics"
-
-	_ "github.com/ShadyDonkey/portcullis/internal/bridge/jetstream"
-	_ "github.com/ShadyDonkey/portcullis/internal/bridge/webhook"
 )
 
 const bridgeCloseTimeout = 5 * time.Second
+
+func registerBridges() error {
+	factories := []bridge.Factory{
+		jetstream.Factory(),
+		webhook.Factory(),
+	}
+
+	var errs []error
+	for _, f := range factories {
+		if err := bridge.Register(f); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
 
 func startBridges(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*bridge.Fanout, <-chan error, error) {
 	fatal := make(chan error, 1)
@@ -62,6 +78,12 @@ func startBridges(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 	fanout, err := bridge.NewFanout(
 		entries, bridge.Options{
 			OnDrop: metrics.BridgeDrop,
+			OnFatal: func(err error) {
+				select {
+				case fatal <- err:
+				default:
+				}
+			},
 			Logger: logger,
 		},
 	)

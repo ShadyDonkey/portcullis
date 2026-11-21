@@ -25,6 +25,10 @@ func main() {
 }
 
 func run() (returnErr error) {
+	if err := registerBridges(); err != nil {
+		return err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err

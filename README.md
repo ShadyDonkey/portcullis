@@ -37,8 +37,9 @@ Overall Portcullis gets you:
 - **Signals**: `SIGINT` / `SIGTERM` trigger a graceful shutdown which stops all shards, queued frames drain to JetStream, 
   pending async publishes complete, and the NATS connection drains before exit.
 - **Fatal exits are intentional and used with caution**: an identify budget too low at startup, a shard that ends 
-  permanently (fatal close code, flapping, dial retries exhausted), or an unexpected NATS disconnect all terminate the
-  process so your restart policy reacts accordingly.
+  permanently (fatal close code, flapping, dial retries exhausted), an unexpected NATS disconnect, or an internal event
+  lifetime violation (a bridge misbehaving with the shared event refcount) all terminate the process so your restart
+  policy reacts accordingly.
 - **Restarts are cheap when possible**: with unchanged intents and shard count, shards RESUME from stored sessions unless
   told otherwise by Discord.
 - **NATS is a hard dependency**: the process exits if the connection closes unexpectedly. Reconnects (up to 60, 2s apart) 

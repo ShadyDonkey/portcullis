@@ -19,16 +19,17 @@ var dispatchDurationBuckets = []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000
 var ackDurationBuckets = []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000}
 
 var (
-	eventsConsumed   otelmetric.Int64Counter
-	bridgeConsumed   otelmetric.Int64Counter
-	eventsPublished  otelmetric.Int64Counter
-	shardDrops       otelmetric.Int64Counter
-	bridgeDrops      otelmetric.Int64Counter
-	shardReconnects  otelmetric.Int64Counter
-	natsReconnects   otelmetric.Int64Counter
-	payloadBytes     otelmetric.Int64Histogram
-	dispatchDuration otelmetric.Float64Histogram
-	ackDuration      otelmetric.Float64Histogram
+	eventsConsumed       otelmetric.Int64Counter
+	bridgeConsumed       otelmetric.Int64Counter
+	eventsPublished      otelmetric.Int64Counter
+	shardDrops           otelmetric.Int64Counter
+	bridgeDrops          otelmetric.Int64Counter
+	invariantViolations  otelmetric.Int64Counter
+	shardReconnects      otelmetric.Int64Counter
+	natsReconnects       otelmetric.Int64Counter
+	payloadBytes         otelmetric.Int64Histogram
+	dispatchDuration     otelmetric.Float64Histogram
+	ackDuration          otelmetric.Float64Histogram
 )
 
 func Setup(m otelmetric.Meter) error {
@@ -52,6 +53,10 @@ func Setup(m otelmetric.Meter) error {
 
 	if bridgeDrops, err = m.Int64Counter("portcullis.bridge.dropped_events"); err != nil {
 		return fmt.Errorf("create bridge.dropped_events metric: %w", err)
+	}
+
+	if invariantViolations, err = m.Int64Counter("portcullis.bridge.invariant_violations"); err != nil {
+		return fmt.Errorf("create bridge.invariant_violations metric: %w", err)
 	}
 
 	if shardReconnects, err = m.Int64Counter("portcullis.shard.reconnects"); err != nil {

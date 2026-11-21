@@ -24,24 +24,25 @@ var (
 	factories = map[string]Factory{}
 )
 
-func Register(f Factory) {
+func Register(f Factory) error {
 	if !validName(f.Name) {
-		// TODO: remove panic?
-		panic(fmt.Sprintf("bridge: invalid name %q", f.Name))
+		return fmt.Errorf("bridge: invalid name %q", f.Name)
 	}
 
 	if f.NewConfig == nil || f.New == nil {
-		panic(fmt.Sprintf("bridge: factory %s needs both New and NewConfig", f.Name))
+		return fmt.Errorf("bridge: factory %s needs both New and NewConfig", f.Name)
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 
 	if _, dupe := factories[f.Name]; dupe {
-		panic(fmt.Sprintf("bridge: factory %s already registered", f.Name))
+		return fmt.Errorf("bridge: factory %s already registered", f.Name)
 	}
 
 	factories[f.Name] = f
+
+	return nil
 }
 
 func Lookup(name string) (Factory, bool) {

@@ -75,6 +75,10 @@ func BridgeDrop(bridge, reason string) {
 	)
 }
 
+func InvariantViolation(component string) {
+	invariantViolations.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("component", component)))
+}
+
 func ShardReconnect(shardID int) {
 	shardReconnects.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.Int("shard_id", shardID)))
 }
