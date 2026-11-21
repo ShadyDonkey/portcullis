@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -38,6 +39,15 @@ func (c *Config) Validate() error {
 	required("discord.token", c.Discord.Token.Missing(), c.Discord.Token.IsEmpty())
 	if len(c.Discord.Intents) == 0 {
 		add("discord.intents: at least one intent is required")
+	}
+
+	apiBase := c.Discord.APIBaseURL
+	required("discord.api_base_url", apiBase.Missing(), false)
+
+	if v := apiBase.String(); v != "" {
+		if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			add("discord.api_base_url: %q must be an http or https URL with a host", v)
+		}
 	}
 
 	ds := c.Discord.Sharding

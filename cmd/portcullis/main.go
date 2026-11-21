@@ -90,7 +90,7 @@ func run() (returnErr error) {
 	defer closeStore()
 
 	httpClient := newDiscordClient(cfg.Discord.Token.Reveal())
-	info, err := fetchGatewayBot(ctx, httpClient)
+	info, err := fetchGatewayBot(ctx, httpClient, cfg.Discord.APIBaseURL.String())
 	if err != nil {
 		return err
 	}

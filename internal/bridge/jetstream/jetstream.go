@@ -163,6 +163,9 @@ func (b *Bridge) Deliver(e *bridge.Event) error {
 		return nil
 	}
 
+	eventType := e.Type
+	frameSize := len(e.Frame)
+
 	for b.js.PublishAsyncPending() >= publishMaxPending {
 		select {
 		case <-b.room:
@@ -173,7 +176,7 @@ func (b *Bridge) Deliver(e *bridge.Event) error {
 		}
 	}
 
-	subject := b.prefix + "." + e.Type
+	subject := b.prefix + "." + eventType
 
 	b.track(e)
 
@@ -191,8 +194,8 @@ func (b *Bridge) Deliver(e *bridge.Event) error {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
 
-	metrics.Payload(b.name, len(e.Frame))
-	metrics.Published(b.name, e.Type)
+	metrics.Payload(b.name, frameSize)
+	metrics.Published(b.name, eventType)
 
 	return nil
 }

@@ -17,9 +17,10 @@ type Config struct {
 }
 
 type DiscordConfig struct {
-	Token    cfgtypes.EnvSecret `toml:"token"`
-	Intents  []string           `toml:"intents"`
-	Sharding ShardingConfig     `toml:"sharding"`
+	Token      cfgtypes.EnvSecret `toml:"token"`
+	Intents    []string           `toml:"intents"`
+	Sharding   ShardingConfig     `toml:"sharding"`
+	APIBaseURL cfgtypes.EnvVar    `toml:"api_base_url"`
 }
 
 type ShardingConfig struct {

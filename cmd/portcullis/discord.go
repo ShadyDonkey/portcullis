@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/config"
@@ -21,6 +22,8 @@ const (
 	gatewayBotMaxAttempts   = 4
 	gatewayBotBaseBackoff   = 1 * time.Second
 	gatewayBotRetryAfterCap = 30 * time.Second
+
+	defaultDiscordAPIBase = "https://discord.com/api"
 )
 
 var version = "dev"
@@ -51,9 +54,12 @@ func newDiscordClient(token string) *http.Client {
 	}
 }
 
-func fetchGatewayBot(ctx context.Context, client *http.Client) (gatewayBotResponse, error) {
-	// TODO: Add config do the base URL (ref: nirn)
-	endpoint := fmt.Sprintf("https://discord.com/api/v%d/gateway/bot", gateway.Version)
+func fetchGatewayBot(ctx context.Context, client *http.Client, apiBaseURL string) (gatewayBotResponse, error) {
+	if apiBaseURL == "" {
+		apiBaseURL = defaultDiscordAPIBase
+	}
+
+	endpoint := fmt.Sprintf("%s/v%d/gateway/bot", strings.TrimSuffix(apiBaseURL, "/"), gateway.Version)
 
 	var resp gatewayBotResponse
 	backoff := gatewayBotBaseBackoff

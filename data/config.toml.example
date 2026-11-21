@@ -5,6 +5,7 @@ intents = [
     "GUILD_MESSAGES",
     "MESSAGE_CONTENT"
 ]
+#api_base_url="https://discord.com/api" # optional: route the /gateway/bot lookup through a proxy (e.g. nirn)
 
 [discord.sharding]
 #shard_count_override=100 # overrides and disables the internal resharding
