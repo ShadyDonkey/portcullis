@@ -91,7 +91,7 @@ func (c *Config) Validate() error {
 	}
 
 	if bridgeErr == nil && len(entries) == 0 {
-		add("bridges: no bridge is enabled, set enabled = true on at least on")
+		add("bridges: no bridge is enabled, set enabled = true on at least one")
 	}
 
 	c.Bridges = entries

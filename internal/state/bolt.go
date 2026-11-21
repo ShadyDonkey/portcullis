@@ -358,9 +358,12 @@ func (b *Bolt) flush() error {
 		return nil
 	}
 
-	writes := make([]sessionWrite, 0, len(b.dirty))
+	dirty := b.dirty
+	b.dirty = make(map[int]struct{})
 
-	for id := range b.dirty {
+	writes := make([]sessionWrite, 0, len(dirty))
+
+	for id := range dirty {
 		w := sessionWrite{
 			id: id,
 		}
@@ -368,20 +371,32 @@ func (b *Bolt) flush() error {
 		binary.BigEndian.PutUint32(w.key[:], uint32(id))
 
 		if s, ok := b.sessions[id]; ok {
-			w.data, _ = json.Marshal(s)
+			data, err := json.Marshal(s)
+			if err != nil {
+				b.dirty[id] = struct{}{}
+				b.logger.Warn("failed to marshal session, will retry", "shard_id", id, "err", err)
+				continue
+			}
+
+			w.data = data
 		}
 
 		writes = append(writes, w)
 	}
 
-	b.dirty = make(map[int]struct{})
-
 	var globalData []byte
 	hadGlobal := b.dirtyGlobal
 
 	if hadGlobal {
-		globalData, _ = json.Marshal(b.global)
-		b.dirtyGlobal = false
+		data, err := json.Marshal(b.global)
+		if err != nil {
+			hadGlobal = false
+			b.dirtyGlobal = true
+			b.logger.Warn("failed to marshal global state, will retry", "err", err)
+		} else {
+			globalData = data
+			b.dirtyGlobal = false
+		}
 	}
 
 	b.mu.Unlock()

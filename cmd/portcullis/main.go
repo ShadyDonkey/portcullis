@@ -68,7 +68,7 @@ func run() (returnErr error) {
 		return err
 	}
 
-	store, err := openStore(ctx, cfg, logger)
+	store, err := openStore(cfg, logger)
 	if err != nil {
 		return err
 	}

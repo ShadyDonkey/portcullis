@@ -13,7 +13,7 @@ import (
 
 const storeCloseTimeout = 2 * time.Second
 
-func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (state.Store, error) {
+func openStore(cfg *config.Config, logger *slog.Logger) (state.Store, error) {
 	return state.OpenBolt(cfg.Portcullis.StatePath, logger)
 }
 

@@ -13,7 +13,6 @@ const (
 	reconnectStableAfter    = 2 * time.Minute
 	shardShutdownTimeout    = 15 * time.Second
 	websocketMaxMessageSize = 128 << 20
-	sessionStoreTimeout     = 1 * time.Second
 
 	// If this many consecutive connections each live shorter than reconnectStableAfter
 	// then reconnecting cannot succeed, stop there instead of burning the daily
