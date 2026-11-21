@@ -9,6 +9,7 @@ require (
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/nats-io/nats.go v1.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
+	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.23.0
@@ -26,11 +27,10 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.34.0 // indirect
-	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/compress v1.20.5 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	go.etcd.io/bbolt v1.5.0 // indirect
-	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+	go.opentelemetry.io/auto/sdk v1.2.2 // indirect
 	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect

@@ -10,7 +10,7 @@ import (
 	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/metrics"
 
-	// TODO: add bridge blank imports here
+	_ "github.com/ShadyDonkey/portcullis/internal/bridge/jetstream"
 	_ "github.com/ShadyDonkey/portcullis/internal/bridge/webhook"
 )
 

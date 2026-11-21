@@ -35,7 +35,7 @@ enabled=false
 url="${NATS_URL}"
 username="${NATS_USERNAME}"
 password="${NATS_PASSWORD}"
-#connection_name="portcullis" # optional, defaults to portcullis for monitoring?
+#connection_name="portcullis" # optional, defaults to portcullis
 
 [bridges.jetstream.stream]
 #name="DISCORD_EVENTS" # optional

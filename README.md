@@ -47,12 +47,15 @@ Overall Portcullis gets you:
 
 ## Bridges
 ### Webhook
-When using the webhook bridge, Portcullis expects either a 2xx or 429 when "fire and forget" is disabled. When a 2xx
-status code, the body is ignored. 
+When using the webhook bridge, Portcullis expects either a 2xx or 429 when "fire and forget" is disabled. 
+
+When a 2xx status code is received Portcullis assumes a successful call. It does not check the body of the response.
 
 429 looks for `Retry-After` header defaulting to zero. `Retry-After` can be HTTP time handled by 
 [`http.ParseTime`](https://pkg.go.dev/net/http#ParseTime) or seconds to wait. After configured `max_retries` it will
-drop and log. 
+drop and log. You should use 429 for whenever an error occurs and you want Portcullis to send it again.
+
+Any other status code is simply logged with a snippet of the body provided.
 
 ## AI Disclosure
 
