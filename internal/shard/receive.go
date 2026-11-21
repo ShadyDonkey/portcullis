@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ShadyDonkey/portcullis/internal/bridge"
 	"github.com/ShadyDonkey/portcullis/internal/framepool"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
 	"github.com/ShadyDonkey/portcullis/internal/metrics"
@@ -325,9 +326,9 @@ func (s *Shard) handleDispatch(
 		return true
 	}
 
-	if err := s.publisher.Publish(ctx, eventType, frame); err == nil {
-		metrics.Published(eventType)
-	}
+	metrics.Payload(len(frame))
+	s.publisher.Send(bridge.NewEvent(frame, eventType, s.id, int(env.seq), time.Now().UnixNano()))
+	metrics.Published(eventType)
 
 	return true
 }

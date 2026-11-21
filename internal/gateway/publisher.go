@@ -1,9 +1,9 @@
 package gateway
 
 import (
-	"context"
+	"github.com/ShadyDonkey/portcullis/internal/bridge"
 )
 
 type EventPublisher interface {
-	Publish(ctx context.Context, eventType string, frame []byte) error
+	Send(event *bridge.Event)
 }

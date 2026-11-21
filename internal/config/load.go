@@ -6,26 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
-const defaultConfigPath = "config.toml"
+const defaultDataPath = "data"
+
+var defaultConfigPath = fmt.Sprintf("%s/config.toml", defaultDataPath)
 
 func defaults() *Config {
 	return &Config{
-		NATS: NATSConfig{
-			ConnectionName: "portcullis",
-			KV: NATSKVConfig{
-				StateBucket: "PORTCULLIS_STATE",
-			},
-			Stream: NATSStreamConfig{
-				Name:          "DISCORD_EVENTS",
-				SubjectPrefix: "events",
-				MaxAge:        Duration(2 * time.Hour),
-				MaxBytes:      256_000_000,
-			},
+		Portcullis: PortcullisConfig{
+			StatePath: fmt.Sprintf("%s/state.db", defaultDataPath),
 		},
 		HTTP: HTTPConfig{
 			Listen: ":3333",

@@ -2,7 +2,7 @@
 ### The iron gate between your bot's business logic and the Discord gateway.
 
 Portcullis is a proxy that holds your bot's Discord gateway connections and republishes every event it receives onto 
-[NATS JetStream](https://nats.io). 
+whatever bridge you configure.
 
 ## Why did I build it?
 
@@ -17,6 +17,7 @@ Overall Portcullis gets you:
 - Decoupling of the business logic from the gateway sessions
 - Filtering controls so you only ever consume what you want to consume
 - Horizontal scaling without worrying about websockets
+- Multiple bridges which allows you to handle the same event in multiple ways
 - No payload modification, what Discord sends is what is published
 - Built in OTel support and Sentry-compatible provider support
 - HTTP server to get health of system and shards as well as send commands to the gateway
@@ -43,6 +44,15 @@ Overall Portcullis gets you:
 - **NATS is a hard dependency**: the process exits if the connection closes unexpectedly. Reconnects (up to 60, 2s apart) 
   are handled by the NATS client before that point.
 - **Limits worth knowing**: websocket frames up to 128 MB are accepted; shard shutdown waits up to 15s per shutdown cycle.
+
+## Bridges
+### Webhook
+When using the webhook bridge, Portcullis expects either a 2xx or 429 when "fire and forget" is disabled. When a 2xx
+status code, the body is ignored. 
+
+429 looks for `Retry-After` header defaulting to zero. `Retry-After` can be HTTP time handled by 
+[`http.ParseTime`](https://pkg.go.dev/net/http#ParseTime) or seconds to wait. After configured `max_retries` it will
+drop and log. 
 
 ## AI Disclosure
 

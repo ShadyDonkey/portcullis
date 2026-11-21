@@ -2,50 +2,34 @@ package config
 
 import (
 	"log/slog"
+
+	"github.com/ShadyDonkey/portcullis/internal/cfgtypes"
 )
 
 type Config struct {
-	Discord       DiscordConfig       `toml:"discord"`
-	Portcullis    PortcullisConfig    `toml:"portcullis"`
-	NATS          NATSConfig          `toml:"nats"`
-	HTTP          HTTPConfig          `toml:"http"`
-	Observability ObservabilityConfig `toml:"observability"`
-	Log           LogConfig           `toml:"log"`
+	Discord       DiscordConfig             `toml:"discord"`
+	Portcullis    PortcullisConfig          `toml:"portcullis"`
+	HTTP          HTTPConfig                `toml:"http"`
+	Observability ObservabilityConfig       `toml:"observability"`
+	Log           LogConfig                 `toml:"log"`
+	RawBridges    map[string]map[string]any `toml:"bridges"`
+	Bridges       []BridgeEntry             `toml:"-"`
 }
 
 type DiscordConfig struct {
-	Token    EnvSecret      `toml:"token"`
-	Intents  []string       `toml:"intents"`
-	Sharding ShardingConfig `toml:"sharding"`
+	Token    cfgtypes.EnvSecret `toml:"token"`
+	Intents  []string           `toml:"intents"`
+	Sharding ShardingConfig     `toml:"sharding"`
 }
 
 type ShardingConfig struct {
-	ReshardCheckInterval *Duration `toml:"reshard_check_interval"`
-	ShardCountOverride   *int      `toml:"shard_count_override"`
+	ReshardCheckInterval *cfgtypes.Duration `toml:"reshard_check_interval"`
+	ShardCountOverride   *int               `toml:"shard_count_override"`
 }
 
 type PortcullisConfig struct {
-	Publish []string `toml:"publish"`
-}
-
-type NATSConfig struct {
-	URL            EnvVar           `toml:"url"`
-	Username       EnvVar           `toml:"username"`
-	Password       EnvSecret        `toml:"password"`
-	ConnectionName string           `toml:"connection_name"`
-	KV             NATSKVConfig     `toml:"kv"`
-	Stream         NATSStreamConfig `toml:"stream"`
-}
-
-type NATSKVConfig struct {
-	StateBucket string `toml:"state_bucket"`
-}
-
-type NATSStreamConfig struct {
-	Name          string   `toml:"name"`
-	SubjectPrefix string   `toml:"subject_prefix"`
-	MaxAge        Duration `toml:"max_age"`
-	MaxBytes      ByteSize `toml:"max_bytes"`
+	Publish   []string `toml:"publish"`
+	StatePath string   `toml:"state_path"`
 }
 
 type HTTPConfig struct {
@@ -56,8 +40,8 @@ type HTTPConfig struct {
 }
 
 type HTTPAuthConfig struct {
-	Header string    `toml:"header"`
-	Key    EnvSecret `toml:"key"`
+	Header string             `toml:"header"`
+	Key    cfgtypes.EnvSecret `toml:"key"`
 }
 
 type HealthzConfig struct {

@@ -1,6 +1,5 @@
 [discord]
 token="${DISCORD_TOKEN}"
-
 intents = [
     "GUILDS",
     "GUILD_MESSAGES",
@@ -17,17 +16,28 @@ publish = [
     "MESSAGE_DELETE",
     # "*" # all events retrived to be published
 ]
+#state_path="data/state.db"
 
-[nats]
+[bridges.webhook]
+enabled=false
+url="${WEBHOOK_URL}"
+#event_in_path=false # true posts to url/EVENT_NAME instead of url
+#fire_and_forget=false # true ignores the response: no retries, no logging
+#max_retries=3 # repeats on 429 or when the receiver cannot be reached
+
+
+[bridges.webhook.auth]
+#key="${WEBHOOK_KEY}" # no key disables auth
+#header="X-API-Key"
+
+[bridges.jetstream]
+enabled=false
 url="${NATS_URL}"
 username="${NATS_USERNAME}"
 password="${NATS_PASSWORD}"
 #connection_name="portcullis" # optional, defaults to portcullis for monitoring?
 
-[nats.kv]
-#state_bucket="PORTCULLIS_STATE" # optional
-
-[nats.stream]
+[bridges.jetstream.stream]
 #name="DISCORD_EVENTS" # optional
 #subject_prefix="events" # optional
 #max_age="24h" # optional

@@ -4,20 +4,26 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
-	"github.com/ShadyDonkey/portcullis/internal/jetstream"
+	"github.com/ShadyDonkey/portcullis/internal/state"
 )
 
-func reconcileGlobalState(
-	ctx context.Context, js *jetstream.JetStream, intents gateway.Intent, numShards int,
-) error {
-	want := jetstream.GlobalState{
+const storeCloseTimeout = 2 * time.Second
+
+func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (state.Store, error) {
+	return state.OpenBolt(cfg.Portcullis.StatePath, logger)
+}
+
+func reconcileGlobalState(ctx context.Context, store state.Store, intents gateway.Intent, numShards int) error {
+	want := state.Global{
 		Intents:   intents,
 		NumShards: numShards,
 	}
 
-	stored, err := js.GetGlobalState(ctx)
+	stored, err := store.GetGlobal()
 	if err != nil {
 		return fmt.Errorf("failed to get global state: %w", err)
 	}
@@ -41,12 +47,12 @@ func reconcileGlobalState(
 	}
 
 	for id := range clearUpTo {
-		if err := js.DeleteSession(ctx, id); err != nil {
+		if err := store.DeleteSession(id); err != nil {
 			return err
 		}
 	}
 
-	if err := js.PutGlobalState(ctx, want); err != nil {
+	if err := store.PutGlobal(want); err != nil {
 		return fmt.Errorf("failed to put global state: %w", err)
 	}
 

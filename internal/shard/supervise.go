@@ -155,10 +155,7 @@ func waitDelay(ctx context.Context, delay time.Duration) error {
 }
 
 func (m *Manager) discardSession(ctx context.Context, id int) error {
-	deleteCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
-	defer cancel()
-
-	if err := m.config.SessionStore.DeleteSession(deleteCtx, id); err != nil {
+	if err := m.config.SessionStore.DeleteSession(id); err != nil {
 		slog.ErrorContext(ctx, "failed to discard session", "shard_id", id, "err", err)
 		return err
 	}

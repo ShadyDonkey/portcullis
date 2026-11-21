@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ShadyDonkey/portcullis/internal/config"
 	"github.com/ShadyDonkey/portcullis/internal/gateway"
-	"github.com/ShadyDonkey/portcullis/internal/jetstream"
 	"github.com/ShadyDonkey/portcullis/internal/metrics"
 	"github.com/ShadyDonkey/portcullis/internal/observability"
 	"github.com/ShadyDonkey/portcullis/internal/shard"
@@ -64,32 +64,34 @@ func run() (returnErr error) {
 		return err
 	}
 
-	js, err := jetstream.New(
-		ctx, jetstream.Config{
-			URL:            cfg.NATS.URL.String(),
-			User:           cfg.NATS.Username.String(),
-			Password:       cfg.NATS.Password.Reveal(),
-			ConnectionName: cfg.NATS.ConnectionName,
-			StateBucket:    cfg.NATS.KV.StateBucket,
-			StreamName:     cfg.NATS.Stream.Name,
-			SubjectPrefix:  cfg.NATS.Stream.SubjectPrefix,
-			MaxAge:         time.Duration(cfg.NATS.Stream.MaxAge),
-			MaxBytes:       int64(cfg.NATS.Stream.MaxBytes),
-		},
-	)
+	store, err := openStore(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	defer js.Close()
+
+	var closeStoreOnce sync.Once
+	closeStore := func() {
+		closeStoreOnce.Do(
+			func() {
+				closeCtx, closeCtxCancel := context.WithTimeout(context.Background(), storeCloseTimeout)
+				defer closeCtxCancel()
+
+				if err := store.Close(closeCtx); err != nil {
+					slog.Error("failed to close state store cleanly", "err", err)
+				}
+			},
+		)
+	}
+
+	defer closeStore()
 
 	httpClient := newDiscordClient(cfg.Discord.Token.Reveal())
-
 	info, err := fetchGatewayBot(ctx, httpClient)
 	if err != nil {
 		return err
 	}
 
-	slog.DebugContext(ctx, "Fetched gateway info", "resp", info)
+	slog.DebugContext(ctx, "fetched gateway bot info", "resp", info)
 
 	numShards, reshardInterval := resolveSharding(ctx, cfg.Discord.Sharding, info.Shards)
 
@@ -122,10 +124,30 @@ func run() (returnErr error) {
 		ctx, "Starting shard manager", "url", info.URL, "intents", intents, "num_shards", numShards,
 	)
 
-	if err := reconcileGlobalState(ctx, js, intents, numShards); err != nil {
+	if err := reconcileGlobalState(ctx, store, intents, numShards); err != nil {
 		slog.ErrorContext(ctx, "failed to reconcile global state", "err", err)
 		return err
 	}
+
+	fanout, bridgeFatal, err := startBridges(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+
+	var closeFanoutOnce sync.Once
+	closeFanout := func() {
+		closeFanoutOnce.Do(
+			func() {
+				closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bridgeCloseTimeout)
+				defer cancel()
+
+				if err := fanout.Close(closeCtx); err != nil {
+					slog.Error("failed to close bridges cleanly", "err", err)
+				}
+			},
+		)
+	}
+	defer closeFanout()
 
 	shardManager := shard.NewManager(
 		shard.Config{
@@ -133,8 +155,8 @@ func run() (returnErr error) {
 			Token:           cfg.Discord.Token.Reveal(),
 			Intents:         int(intents),
 			NumShards:       numShards,
-			Publisher:       js,
-			SessionStore:    js,
+			Publisher:       fanout,
+			SessionStore:    store,
 			MaxConcurrency:  info.SessionStartLimit.MaxConcurrency,
 			ReshardInterval: reshardInterval,
 			Filter:          gateway.NewEventFilter(cfg.Portcullis.Publish),
@@ -152,7 +174,7 @@ func run() (returnErr error) {
 				}
 				return up
 			},
-			InFlightBytes: js.InFlightBytes,
+			InFlightBytes: fanout.InFlightBytes,
 		},
 	); err != nil {
 		return err
@@ -190,14 +212,17 @@ func run() (returnErr error) {
 	case runErr = <-fatal:
 		slog.ErrorContext(ctx, "fatal shard error, shutting down", "err", runErr)
 
-	case runErr = <-js.UnexpectedClose():
-		slog.ErrorContext(ctx, "NATS connection closed, shutting down", "err", runErr)
+	case runErr = <-bridgeFatal:
+		slog.ErrorContext(ctx, "bridge asked for shutdown", "err", runErr)
 	}
 
 	stop()
 	shardManager.Shutdown()
+	closeStore()
+	closeFanout()
 
 	return runErr
+
 }
 
 func newLogger(c config.LogConfig) *slog.Logger {

@@ -74,31 +74,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	required("nats.url", c.NATS.URL.Missing(), c.NATS.URL.String() == "")
-	required("nats.username", c.NATS.Username.Missing(), c.NATS.Username.String() == "")
-	required("nats.password", c.NATS.Password.Missing(), c.NATS.Password.IsEmpty())
+	entries, bridgeErr := decodeBridges(c.RawBridges)
 
-	if c.NATS.ConnectionName == "" {
-		add("nats.connection_name must not be empty")
+	if bridgeErr != nil {
+		errs = append(errs, bridgeErr)
 	}
 
-	for _, n := range []struct{ k, v string }{
-		{"nats.kv.state_bucket", c.NATS.KV.StateBucket},
-		{"nats.stream.name", c.NATS.Stream.Name},
-		{"nats.stream.subject_prefix", c.NATS.Stream.SubjectPrefix},
-	} {
-		if !namePattern.MatchString(n.v) {
-			add("%s: %q must contain only numbers, letters, and underscores", n.k, n.v)
-		}
+	if bridgeErr == nil && len(entries) == 0 {
+		add("bridges: no bridge is enabled, set enabled = true on at least on")
 	}
 
-	if c.NATS.Stream.MaxAge <= 0 {
-		add("nats.stream.max_age must be greater than zero")
-	}
-
-	if c.NATS.Stream.MaxBytes <= 0 {
-		add("nats.stream.max_bytes must be greater than zero")
-	}
+	c.Bridges = entries
 
 	if c.HTTP.Enabled {
 		if c.HTTP.Listen == "" {

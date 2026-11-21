@@ -60,7 +60,7 @@ type ShardConfig struct {
 }
 
 func NewShard(ctx context.Context, config ShardConfig) (*Shard, error) {
-	stored, err := config.SessionStore.GetSession(ctx, config.ID)
+	stored, err := config.SessionStore.GetSession(config.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load session: %w", err)
 	}
@@ -278,10 +278,7 @@ func (s *Shard) persistSession(ctx context.Context) {
 	sess := *s.session
 	sess.LastSequence = &seqCopy
 
-	putCtx, cancel := context.WithTimeout(ctx, sessionStoreTimeout)
-	defer cancel()
-
-	if err := s.sessionStore.PutSession(putCtx, s.id, sess); err != nil {
+	if err := s.sessionStore.PutSession(s.id, sess); err != nil {
 		slog.WarnContext(
 			ctx, "failed to persist session", "shard_id", s.id, "err", err,
 		)
