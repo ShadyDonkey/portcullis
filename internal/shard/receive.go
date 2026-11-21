@@ -326,9 +326,7 @@ func (s *Shard) handleDispatch(
 		return true
 	}
 
-	metrics.Payload(len(frame))
 	s.publisher.Send(bridge.NewEvent(frame, eventType, s.id, int(env.seq), time.Now().UnixNano()))
-	metrics.Published(eventType)
 
 	return true
 }

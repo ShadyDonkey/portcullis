@@ -10,7 +10,12 @@ type Bridge interface {
 	Close(ctx context.Context) error
 }
 
+type InFlightReporter interface {
+	InFlightBytes() int64
+}
+
 type Env struct {
+	Name   string
 	Logger *slog.Logger
 	Fatal  func(error)
 }

@@ -39,6 +39,7 @@ func init() {
 }
 
 type Bridge struct {
+	name          string
 	client        *http.Client
 	target        string
 	query         string
@@ -71,6 +72,7 @@ func newBridge(_ context.Context, c bridge.Config, env bridge.Env) (bridge.Bridg
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &Bridge{
+		name:          env.Name,
 		client:        &http.Client{Transport: transport, Timeout: requestTimeout},
 		eventInPath:   cfg.EventInPath,
 		fireAndForget: cfg.FireAndForget,
@@ -162,6 +164,9 @@ func (b *Bridge) fire(e *bridge.Event) {
 		return
 	}
 
+	metrics.Payload(b.name, len(e.Frame))
+	metrics.Published(b.name, e.Type)
+
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
 	_ = resp.Body.Close()
 }
@@ -197,7 +202,9 @@ func (b *Bridge) deliver(e *bridge.Event) {
 
 		switch {
 		case status >= 200 && status < 300:
-			metrics.Ack(e.Type, time.Since(start))
+			metrics.Ack(b.name, e.Type, time.Since(start))
+			metrics.Payload(b.name, len(e.Frame))
+			metrics.Published(b.name, e.Type)
 			return
 
 		case status == http.StatusTooManyRequests:
@@ -240,7 +247,7 @@ func (b *Bridge) retryAfter(attempt int, wait time.Duration) bool {
 }
 
 func (b *Bridge) drop(reason, kind string, err error, e *bridge.Event) {
-	metrics.PublishDrop(reason)
+	metrics.BridgeDrop(b.name, reason)
 	b.fail.Record(kind, err, "event", e.Type, "shard", e.Shard, "seq", e.Sequence)
 }
 

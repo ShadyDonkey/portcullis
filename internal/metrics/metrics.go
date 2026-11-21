@@ -20,9 +20,10 @@ var ackDurationBuckets = []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 200
 
 var (
 	eventsConsumed   otelmetric.Int64Counter
+	bridgeConsumed   otelmetric.Int64Counter
 	eventsPublished  otelmetric.Int64Counter
 	shardDrops       otelmetric.Int64Counter
-	publishDrops     otelmetric.Int64Counter
+	bridgeDrops      otelmetric.Int64Counter
 	shardReconnects  otelmetric.Int64Counter
 	natsReconnects   otelmetric.Int64Counter
 	payloadBytes     otelmetric.Int64Histogram
@@ -37,16 +38,20 @@ func Setup(m otelmetric.Meter) error {
 		return fmt.Errorf("create shard.events_consumed metric: %w", err)
 	}
 
-	if eventsPublished, err = m.Int64Counter("portcullis.shard.events_published"); err != nil {
-		return fmt.Errorf("create shard.events_published metric: %w", err)
+	if bridgeConsumed, err = m.Int64Counter("portcullis.bridge.events_consumed"); err != nil {
+		return fmt.Errorf("create bridge.events_consumed metric: %w", err)
+	}
+
+	if eventsPublished, err = m.Int64Counter("portcullis.bridge.events_published"); err != nil {
+		return fmt.Errorf("create bridge.events_published metric: %w", err)
 	}
 
 	if shardDrops, err = m.Int64Counter("portcullis.shard.dropped_events"); err != nil {
 		return fmt.Errorf("create shard.dropped_events metric: %w", err)
 	}
 
-	if publishDrops, err = m.Int64Counter("portcullis.publisher.dropped_events"); err != nil {
-		return fmt.Errorf("create publisher.dropped_events metric: %w", err)
+	if bridgeDrops, err = m.Int64Counter("portcullis.bridge.dropped_events"); err != nil {
+		return fmt.Errorf("create bridge.dropped_events metric: %w", err)
 	}
 
 	if shardReconnects, err = m.Int64Counter("portcullis.shard.reconnects"); err != nil {
@@ -58,11 +63,11 @@ func Setup(m otelmetric.Meter) error {
 	}
 
 	if payloadBytes, err = m.Int64Histogram(
-		"portcullis.publisher.payload_bytes",
+		"portcullis.bridge.payload_bytes",
 		otelmetric.WithUnit("By"),
 		otelmetric.WithExplicitBucketBoundaries(frameSizeBuckets...),
 	); err != nil {
-		return fmt.Errorf("create publisher.payload_bytes metric: %w", err)
+		return fmt.Errorf("create bridge.payload_bytes metric: %w", err)
 	}
 
 	if dispatchDuration, err = m.Float64Histogram(
@@ -74,11 +79,11 @@ func Setup(m otelmetric.Meter) error {
 	}
 
 	if ackDuration, err = m.Float64Histogram(
-		"portcullis.publisher.ack_duration",
+		"portcullis.bridge.ack_duration",
 		otelmetric.WithUnit("ms"),
 		otelmetric.WithExplicitBucketBoundaries(ackDurationBuckets...),
 	); err != nil {
-		return fmt.Errorf("create publisher.ack_duration metric: %w", err)
+		return fmt.Errorf("create bridge.ack_duration metric: %w", err)
 	}
 
 	return nil
@@ -95,9 +100,9 @@ func RegisterGauges(m otelmetric.Meter, sources Sources) error {
 		return fmt.Errorf("create shard.up metric: %w", err)
 	}
 
-	inFlight, err := m.Int64ObservableGauge("portcullis.publisher.in_flight_bytes")
+	inFlight, err := m.Int64ObservableGauge("portcullis.bridge.in_flight_bytes")
 	if err != nil {
-		return fmt.Errorf("create in_flight_bytes metric: %w", err)
+		return fmt.Errorf("create bridge.in_flight_bytes metric: %w", err)
 	}
 
 	_, err = m.RegisterCallback(

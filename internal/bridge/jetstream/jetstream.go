@@ -39,16 +39,18 @@ type pendingEvent struct {
 }
 
 type Bridge struct {
-	nc          *nats.Conn
-	js          natsjs.JetStream
-	prefix      string
-	mu          sync.Mutex
-	pending     map[uintptr]pendingEvent
-	room        chan struct{}
-	stop        chan struct{}
-	stopped     atomic.Bool
-	closing     atomic.Bool
-	ackFailures *bridge.FailureLog
+	nc           *nats.Conn
+	js           natsjs.JetStream
+	name         string
+	prefix       string
+	mu           sync.Mutex
+	pending      map[uintptr]pendingEvent
+	pendingBytes atomic.Int64
+	room         chan struct{}
+	stop         chan struct{}
+	stopped      atomic.Bool
+	closing      atomic.Bool
+	ackFailures  *bridge.FailureLog
 }
 
 func newBridge(ctx context.Context, c bridge.Config, env bridge.Env) (bridge.Bridge, error) {
@@ -58,6 +60,7 @@ func newBridge(ctx context.Context, c bridge.Config, env bridge.Env) (bridge.Bri
 	}
 
 	b := &Bridge{
+		name:        env.Name,
 		prefix:      cfg.Stream.SubjectPrefix,
 		pending:     make(map[uintptr]pendingEvent),
 		room:        make(chan struct{}, 1),
@@ -161,7 +164,7 @@ func (b *Bridge) Deliver(e *bridge.Event) error {
 		select {
 		case <-b.room:
 		case <-b.stop:
-			metrics.PublishDrop(metrics.DropShutdown)
+			metrics.BridgeDrop(b.name, metrics.DropShutdown)
 			e.Release()
 			return errors.New("jetstream: bridge closed")
 		}
@@ -175,15 +178,18 @@ func (b *Bridge) Deliver(e *bridge.Event) error {
 		b.untrack(e)
 
 		if errors.Is(err, natsjs.ErrTooManyStalledMsgs) {
-			metrics.PublishDrop(metrics.DropStalled)
+			metrics.BridgeDrop(b.name, metrics.DropStalled)
 		} else {
-			metrics.PublishDrop(metrics.DropSyncError)
+			metrics.BridgeDrop(b.name, metrics.DropSyncError)
 		}
 
 		e.Release()
 
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
+
+	metrics.Payload(b.name, len(e.Frame))
+	metrics.Published(b.name, e.Type)
 
 	return nil
 }
@@ -211,10 +217,14 @@ func (b *Bridge) Close(ctx context.Context) error {
 	b.pending = make(map[uintptr]pendingEvent)
 	b.mu.Unlock()
 
+	var leftoverBytes int64
 	for _, p := range leftover {
-		metrics.PublishDrop(metrics.DropShutdown)
+		leftoverBytes += int64(len(p.event.Frame))
+		metrics.BridgeDrop(b.name, metrics.DropShutdown)
 		p.event.Release()
 	}
+
+	b.pendingBytes.Add(-leftoverBytes)
 
 	b.nc.Close()
 
@@ -223,7 +233,7 @@ func (b *Bridge) Close(ctx context.Context) error {
 
 func (b *Bridge) onAck(_ natsjs.JetStream, msg *nats.Msg, _ *natsjs.PubAck) {
 	if p, ok := b.take(msg.Data); ok {
-		metrics.Ack(p.event.Type, time.Since(p.enqueuedAt))
+		metrics.Ack(b.name, p.event.Type, time.Since(p.enqueuedAt))
 		p.event.Release()
 	}
 
@@ -232,7 +242,7 @@ func (b *Bridge) onAck(_ natsjs.JetStream, msg *nats.Msg, _ *natsjs.PubAck) {
 
 func (b *Bridge) onError(_ natsjs.JetStream, msg *nats.Msg, err error) {
 	b.ackFailures.Record("async_ack", err, "subject", msg.Subject)
-	metrics.PublishDrop(metrics.DropAckError)
+	metrics.BridgeDrop(b.name, metrics.DropAckError)
 
 	if p, ok := b.take(msg.Data); ok {
 		p.event.Release()
@@ -245,12 +255,16 @@ func (b *Bridge) track(e *bridge.Event) {
 	b.mu.Lock()
 	b.pending[frameKey(e.Frame)] = pendingEvent{event: e, enqueuedAt: time.Now()}
 	b.mu.Unlock()
+
+	b.pendingBytes.Add(int64(len(e.Frame)))
 }
 
 func (b *Bridge) untrack(e *bridge.Event) {
 	b.mu.Lock()
 	delete(b.pending, frameKey(e.Frame))
 	b.mu.Unlock()
+
+	b.pendingBytes.Add(-int64(len(e.Frame)))
 }
 
 func (b *Bridge) take(frame []byte) (pendingEvent, bool) {
@@ -265,7 +279,15 @@ func (b *Bridge) take(frame []byte) (pendingEvent, bool) {
 	delete(b.pending, key)
 	b.mu.Unlock()
 
+	if ok {
+		b.pendingBytes.Add(-int64(len(frame)))
+	}
+
 	return p, ok
+}
+
+func (b *Bridge) InFlightBytes() int64 {
+	return b.pendingBytes.Load()
 }
 
 func (b *Bridge) signalRoom() {

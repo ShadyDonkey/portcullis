@@ -1,17 +1,14 @@
 package bridge
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
+)
 
 const (
 	DefaultQueueSlots   = 4096
 	DefaultQueueByteCap = 128 << 20
-)
-
-const (
-	DropByteCap     = "byte_cap"
-	DropRingEvicted = "ring_evicted"
-	DropAfterClose  = "after_close"
-	DropShutdown    = "shutdown"
 )
 
 type queue struct {
@@ -47,22 +44,22 @@ func (q *queue) push(e *Event) {
 
 	if q.closed {
 		q.mu.Unlock()
-		q.dropIncoming(DropAfterClose, e)
+		q.dropIncoming(metrics.DropAfterClose, e)
 		return
 	}
 
 	if size > q.byteCap {
 		q.mu.Unlock()
-		q.dropIncoming(DropByteCap, e)
+		q.dropIncoming(metrics.DropByteCap, e)
 		return
 	}
 
 	for q.bytes+size > q.byteCap {
-		q.evictOldestLocked(DropByteCap)
+		q.evictOldestLocked(metrics.DropByteCap)
 	}
 
 	if q.n == len(q.ring) {
-		q.evictOldestLocked(DropRingEvicted)
+		q.evictOldestLocked(metrics.DropRingEvicted)
 	}
 
 	q.ring[(q.head+q.n)%len(q.ring)] = e
@@ -106,7 +103,7 @@ func (q *queue) abandon() {
 	defer q.mu.Unlock()
 
 	for q.n > 0 {
-		q.evictOldestLocked(DropShutdown)
+		q.evictOldestLocked(metrics.DropShutdown)
 	}
 }
 

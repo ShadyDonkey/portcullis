@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
+
+	"github.com/ShadyDonkey/portcullis/internal/metrics"
 )
 
 type Entry struct {
@@ -15,7 +18,7 @@ type Entry struct {
 type Options struct {
 	Slots   int
 	ByteCap int64
-	OnDrop  func(reason string)
+	OnDrop  func(bridge, reason string)
 	Logger  *slog.Logger
 }
 
@@ -24,11 +27,12 @@ type Fanout struct {
 }
 
 type runner struct {
-	name string
-	b    Bridge
-	q    *queue
-	fail *FailureLog
-	done chan struct{}
+	name     string
+	b        Bridge
+	q        *queue
+	fail     *FailureLog
+	done     chan struct{}
+	inFlight atomic.Int64
 }
 
 func NewFanout(entries []Entry, opts Options) (*Fanout, error) {
@@ -51,13 +55,23 @@ func NewFanout(entries []Entry, opts Options) (*Fanout, error) {
 		logger = slog.Default()
 	}
 
+	onDrop := opts.OnDrop
+	if onDrop == nil {
+		onDrop = func(string, string) {}
+	}
+
 	f := &Fanout{runners: make([]*runner, 0, len(entries))}
 
 	for _, entry := range entries {
 		r := &runner{
 			name: entry.Name,
 			b:    entry.Bridge,
-			q:    newQueue(slots, byteCap, opts.OnDrop),
+			q: newQueue(
+				slots, byteCap,
+				func(reason string) {
+					onDrop(entry.Name, reason)
+				},
+			),
 			fail: NewFailureLog(logger.With("bridge", entry.Name)),
 			done: make(chan struct{}),
 		}
@@ -78,7 +92,14 @@ func (r *runner) run() {
 			return
 		}
 
-		if err := r.b.Deliver(e); err != nil {
+		metrics.BridgeConsumed(r.name, e.Type)
+
+		size := int64(len(e.Frame))
+		r.inFlight.Add(size)
+		err := r.b.Deliver(e)
+		r.inFlight.Add(-size)
+
+		if err != nil {
 			r.fail.Record("deliver", err)
 		}
 	}
@@ -98,6 +119,11 @@ func (f *Fanout) InFlightBytes() int64 {
 	var total int64
 	for _, r := range f.runners {
 		total += r.q.queuedBytes()
+		total += r.inFlight.Load()
+
+		if rep, ok := r.b.(InFlightReporter); ok {
+			total += rep.InFlightBytes()
+		}
 	}
 
 	return total

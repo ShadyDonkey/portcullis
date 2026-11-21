@@ -33,6 +33,7 @@ func startBridges(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 
 	for _, spec := range cfg.Bridges {
 		env := bridge.Env{
+			Name:   spec.Name,
 			Logger: logger.With("bridge", spec.Name),
 			Fatal: func(err error) {
 				select {
@@ -60,7 +61,7 @@ func startBridges(ctx context.Context, cfg *config.Config, logger *slog.Logger) 
 
 	fanout, err := bridge.NewFanout(
 		entries, bridge.Options{
-			OnDrop: metrics.PublishDrop,
+			OnDrop: metrics.BridgeDrop,
 			Logger: logger,
 		},
 	)

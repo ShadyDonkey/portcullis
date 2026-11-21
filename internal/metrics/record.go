@@ -27,8 +27,18 @@ func Consumed(eventType string) {
 	eventsConsumed.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", eventType)))
 }
 
-func Published(eventType string) {
-	eventsPublished.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("event_type", eventType)))
+func BridgeConsumed(bridge, eventType string) {
+	bridgeConsumed.Add(
+		measureCtx, 1,
+		otelmetric.WithAttributes(attribute.String("bridge", bridge), attribute.String("event_type", eventType)),
+	)
+}
+
+func Published(bridge, eventType string) {
+	eventsPublished.Add(
+		measureCtx, 1,
+		otelmetric.WithAttributes(attribute.String("bridge", bridge), attribute.String("event_type", eventType)),
+	)
 }
 
 func Dispatch(eventType string, d time.Duration) {
@@ -39,15 +49,18 @@ func Dispatch(eventType string, d time.Duration) {
 	)
 }
 
-func Payload(size int) {
-	payloadBytes.Record(measureCtx, int64(size))
+func Payload(bridge string, size int) {
+	payloadBytes.Record(
+		measureCtx, int64(size),
+		otelmetric.WithAttributes(attribute.String("bridge", bridge)),
+	)
 }
 
-func Ack(eventType string, d time.Duration) {
+func Ack(bridge, eventType string, d time.Duration) {
 	ackDuration.Record(
 		measureCtx,
 		float64(d)/float64(time.Millisecond),
-		otelmetric.WithAttributes(attribute.String("event_type", eventType)),
+		otelmetric.WithAttributes(attribute.String("bridge", bridge), attribute.String("event_type", eventType)),
 	)
 }
 
@@ -55,8 +68,11 @@ func ShardDrop(reason string) {
 	shardDrops.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("reason", reason)))
 }
 
-func PublishDrop(reason string) {
-	publishDrops.Add(measureCtx, 1, otelmetric.WithAttributes(attribute.String("reason", reason)))
+func BridgeDrop(bridge, reason string) {
+	bridgeDrops.Add(
+		measureCtx, 1,
+		otelmetric.WithAttributes(attribute.String("bridge", bridge), attribute.String("reason", reason)),
+	)
 }
 
 func ShardReconnect(shardID int) {
